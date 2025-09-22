@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post-service
+  template:
+    metadata:
+      labels:
+        app: post-service
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      containers:
+      - name: post-service
+        image: atcs1234/zpc:dev
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ENV
+          value: "dev"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+        # Add more environment variables as needed

@@ -1,0 +1,228 @@
+syntax = "proto3";
+
+package posts;
+
+// Post Message
+message Post {
+    int64 id = 1;
+    int64 user_id = 2;
+    string user_first_name = 3;
+    string user_last_name = 4;
+    string user_email = 5;
+    string user_phone = 6;
+    string user_role = 7;
+    string content = 8;
+    string title = 9;
+    string visibility = 10;
+    string property_type = 11;
+    string location = 12;
+    string map_location = 13;
+    double price = 14;
+    string status = 15;
+    int64 created_at = 16;
+    repeated PostMedia media = 17;
+    repeated Comment comments = 18;
+    int32 like_count = 19;
+    int32 comment_count = 20;
+}
+
+// Post Media Message
+message PostMedia {
+    int64 id = 1;
+    int64 post_id = 2;
+    string media_type = 3;
+    string media_url = 4;
+    int32 media_order = 5;
+    int64 media_size = 6;
+    string caption = 7;
+    int64 uploaded_at = 8;
+}
+
+// Comment Message
+message Comment {
+    int64 id = 1;
+    int64 post_id = 2;
+    int64 parent_comment_id = 3;
+    string comment = 4;
+    int64 user_id = 5;
+    string user_first_name = 6;
+    string user_last_name = 7;
+    string user_role = 8;
+    string status = 9;
+    int64 added_at = 10;
+    int64 commented_at = 11;
+    repeated Comment replies = 12;
+    int32 like_count = 13;
+}
+
+// Post List Message
+message PostList {
+    repeated Post posts = 1;
+}
+
+// Post Request Message
+message PostRequest {
+    int64 post_id = 1;
+}
+
+// Post Create Request Message
+message PostCreateRequest {
+    int64 user_id = 1;
+    string title = 2;
+    string content = 3;
+    string visibility = 4;
+    string property_type = 5;
+    string location = 6;
+    string map_location = 7;
+    double price = 8;
+    string status = 9;
+    repeated PostMediaUpload media = 10;
+}
+
+// Post Media Upload Message
+message PostMediaUpload {
+    string media_type = 1;
+    bytes media_data = 2;
+    int32 media_order = 3;
+    string caption = 4;
+}
+
+// Post Update Request Message
+message PostUpdateRequest {
+    int64 post_id = 1;
+    string title = 2;
+    string content = 3;
+    string visibility = 4;
+    string property_type = 5;
+    string location = 6;
+    string map_location = 7;
+    double price = 8;
+    string status = 9;
+}
+
+// Post Media Request Message
+message PostMediaRequest {
+    int64 post_id = 1;
+    repeated PostMediaUpload media = 2;
+}
+
+// Like Request Message
+message LikeRequest {
+    int64 post_id = 1;  // Changed from 'id' to 'post_id' for clarity
+    int64 user_id = 2;
+    string reaction_type = 3;
+}
+
+// Comment Like Request Message
+message CommentLikeRequest {
+    int64 comment_id = 1;
+    int64 user_id = 2;
+    string reaction_type = 3;
+}
+
+// Comment Create Request Message
+message CommentCreateRequest {
+    int64 post_id = 1;
+    int64 parent_comment_id = 2;
+    string comment = 3;
+    int64 user_id = 4;
+}
+
+// Comment Update Request Message
+message CommentUpdateRequest {
+    int64 comment_id = 1;
+    string comment = 2;
+    string status = 3;
+}
+
+// Get Comments Request Message
+message GetCommentsRequest {
+    int64 post_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+}
+
+// Get Posts By User Request Message
+message GetPostsByUserRequest {
+    int64 user_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+}
+
+// Search Posts Request Message
+message SearchPostsRequest {
+    string property_type = 1;
+    string location = 2;
+    double min_price = 3;
+    double max_price = 4;
+    string status = 5;
+    int32 page = 6;
+    int32 limit = 7;
+}
+
+// Post Response Message
+message PostResponse {
+    bool success = 1;
+    string message = 2;
+    Post post = 3;
+}
+
+// Post List Response Message
+message PostListResponse {
+    bool success = 1;
+    string message = 2;
+    repeated Post posts = 3;
+    int32 total_count = 4;
+    int32 page = 5;
+    int32 total_pages = 6;
+}
+
+// Comment List Response Message
+message CommentListResponse {
+    bool success = 1;
+    string message = 2;
+    repeated Comment comments = 3;
+    int32 total_count = 4;
+    int32 page = 5;
+    int32 total_pages = 6;
+}
+
+// Generic Response Message
+message GenericResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// Comment Response Message
+message CommentResponse {
+    bool success = 1;
+    string message = 2;
+    Comment comment = 3;
+}
+
+// Posts Service Definition
+service PostsService {
+    // Post Operations
+    rpc CreatePost(PostCreateRequest) returns (PostResponse) {}
+    rpc GetPost(PostRequest) returns (PostResponse) {}
+    rpc UpdatePost(PostUpdateRequest) returns (PostResponse) {}
+    rpc DeletePost(PostRequest) returns (GenericResponse) {}
+    rpc GetPostsByUser(GetPostsByUserRequest) returns (PostListResponse) {}
+    rpc SearchPosts(SearchPostsRequest) returns (PostListResponse) {}
+
+    // Media Operations
+    rpc AddPostMedia(PostMediaRequest) returns (PostResponse) {}
+    rpc DeletePostMedia(PostRequest) returns (GenericResponse) {}
+
+    // Like Operations
+    rpc LikePost(LikeRequest) returns (PostResponse) {}
+    rpc UnlikePost(LikeRequest) returns (PostResponse) {}
+
+    // Comment Operations
+    rpc CreateComment(CommentCreateRequest) returns (CommentResponse) {}
+    rpc UpdateComment(CommentUpdateRequest) returns (CommentResponse) {}
+    rpc DeleteComment(PostRequest) returns (GenericResponse) {}
+    rpc GetComments(GetCommentsRequest) returns (CommentListResponse) {}
+    rpc LikeComment(CommentLikeRequest) returns (CommentResponse) {}
+    rpc UnlikeComment(CommentLikeRequest) returns (CommentResponse) {}
+} 
