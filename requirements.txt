@@ -7,3 +7,4 @@ grpcio-tools
 fastapi
 uvicorn
 pydantic
+PyJWT
