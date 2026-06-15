@@ -687,7 +687,7 @@ def serve():
         interceptors=[AuthServerInterceptor()]
     )
     post_pb2_grpc.add_PostsServiceServicer_to_server(PostsService(), server)
-    port = os.environ.get("GRPC_PORT", "50055")
+    port = os.environ.get("PORT", "50055")
     server.add_insecure_port(f"0.0.0.0:{port}")
     server.start()
     print(f"Post gRPC service started on port {port}")
