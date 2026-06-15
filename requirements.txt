@@ -1,9 +1,9 @@
 SQLAlchemy
 python-dotenv
-psycopg2
+psycopg2-binary
 grpcio
 protobuf
 grpcio-tools
 fastapi
 uvicorn
-pydantic 
+pydantic
