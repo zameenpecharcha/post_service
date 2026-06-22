@@ -679,6 +679,11 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 success=False,
                 message=f"Failed to unlike comment: {str(e)}"
             )
+import os
+import grpc
+from concurrent import futures
+from grpc_reflection.v1alpha import reflection
+from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 def serve():
     import os
@@ -687,11 +692,35 @@ def serve():
         interceptors=[AuthServerInterceptor()]
     )
     post_pb2_grpc.add_PostsServiceServicer_to_server(PostsService(), server)
-    port = os.environ.get("PORT", "50055")
-    server.add_insecure_port(f"0.0.0.0:{port}")
-    server.start()
-    print(f"Post gRPC service started on port {port}")
-    server.wait_for_termination()
+    health_servicer = health.HealthServicer()
 
-if __name__ == "__main__":
-    serve() 
+    health_pb2_grpc.add_HealthServicer_to_server(
+        health_servicer,
+        server,
+    )
+
+    health_servicer.set(
+        "",
+        health_pb2.HealthCheckResponse.SERVING,
+    )
+
+    SERVICE_NAMES = (
+        post_pb2.DESCRIPTOR.services_by_name[
+            "PostsService"
+        ].full_name,
+        health_pb2.DESCRIPTOR.services_by_name[
+        "Health"
+        ].full_name,
+        reflection.SERVICE_NAME,
+    )
+
+    reflection.enable_server_reflection(SERVICE_NAMES, server)
+
+    port = os.environ.get("PORT", "50055")
+
+    server.add_insecure_port(f"0.0.0.0:{port}")
+
+    print(f"Starting post gRPC service on port {port}...")
+
+    server.start()
+    server.wait_for_termination()
