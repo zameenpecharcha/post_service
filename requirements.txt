@@ -4,11 +4,11 @@ psycopg2-binary
 grpcio
 protobuf
 grpcio-tools
-fastapi
-uvicorn
 pydantic
 boto3
 botocore 
+bcrypt
+PyJWT[crypto]
+cryptography
 grpcio-reflection
 grpcio-health-checking
-PyJWT
