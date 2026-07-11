@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, TIMESTAMP, ForeignKey, Text, Numeric, Integer
+from sqlalchemy import Column, BigInteger, String, TIMESTAMP, ForeignKey, Text, Numeric, Integer, Boolean, Float
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from ..utils.db_connection import Base
@@ -11,34 +11,24 @@ class Post(Base):
     user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
     content = Column(String(2000))
     title = Column(String(255))
-    visibility = Column(String(20))
-    property_type = Column(String(50))
-    location = Column(String(255))
-    map_location = Column(String(100))
+    visibility = Column(String(50))
+    type = Column(String(50))
+    location = Column(Text)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    # map_location removed (latitude/longitude now used)
     price = Column(Numeric(15,2))
-    status = Column(String(20))
+    status = Column(String(50))
+    is_anonymous = Column(Boolean, default=False)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
     # Relationships
     user = relationship("User", back_populates="posts")
-    media = relationship("PostMedia", back_populates="post", cascade="all, delete-orphan")
+    # media removed; use shared `media` table
     likes = relationship("PostLike", back_populates="post", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="post", cascade="all, delete-orphan")
 
-class PostMedia(Base):
-    __tablename__ = "post_media"
-
-    id = Column(BigInteger, primary_key=True)
-    post_id = Column(BigInteger, ForeignKey('posts.id', ondelete='CASCADE'), nullable=False)
-    media_type = Column(String(50))
-    media_url = Column(Text)
-    media_order = Column(Integer)
-    media_size = Column(BigInteger)
-    caption = Column(Text)
-    uploaded_at = Column(TIMESTAMP, default=datetime.utcnow)
-
-    # Relationships
-    post = relationship("Post", back_populates="media")
+# Unified media table exists elsewhere; no PostMedia model here
 
 class PostLike(Base):
     __tablename__ = "post_likes"

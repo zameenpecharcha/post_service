@@ -72,7 +72,7 @@ class PostsServiceStub(object):
                 _registered_method=True)
         self.DeletePostMedia = channel.unary_unary(
                 '/posts.PostsService/DeletePostMedia',
-                request_serializer=post__pb2.PostRequest.SerializeToString,
+                request_serializer=post__pb2.MediaIdRequest.SerializeToString,
                 response_deserializer=post__pb2.GenericResponse.FromString,
                 _registered_method=True)
         self.LikePost = channel.unary_unary(
@@ -97,7 +97,7 @@ class PostsServiceStub(object):
                 _registered_method=True)
         self.DeleteComment = channel.unary_unary(
                 '/posts.PostsService/DeleteComment',
-                request_serializer=post__pb2.PostRequest.SerializeToString,
+                request_serializer=post__pb2.CommentRequest.SerializeToString,
                 response_deserializer=post__pb2.GenericResponse.FromString,
                 _registered_method=True)
         self.GetComments = channel.unary_unary(
@@ -261,7 +261,7 @@ def add_PostsServiceServicer_to_server(servicer, server):
             ),
             'DeletePostMedia': grpc.unary_unary_rpc_method_handler(
                     servicer.DeletePostMedia,
-                    request_deserializer=post__pb2.PostRequest.FromString,
+                    request_deserializer=post__pb2.MediaIdRequest.FromString,
                     response_serializer=post__pb2.GenericResponse.SerializeToString,
             ),
             'LikePost': grpc.unary_unary_rpc_method_handler(
@@ -286,7 +286,7 @@ def add_PostsServiceServicer_to_server(servicer, server):
             ),
             'DeleteComment': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteComment,
-                    request_deserializer=post__pb2.PostRequest.FromString,
+                    request_deserializer=post__pb2.CommentRequest.FromString,
                     response_serializer=post__pb2.GenericResponse.SerializeToString,
             ),
             'GetComments': grpc.unary_unary_rpc_method_handler(
@@ -520,7 +520,7 @@ class PostsService(object):
             request,
             target,
             '/posts.PostsService/DeletePostMedia',
-            post__pb2.PostRequest.SerializeToString,
+            post__pb2.MediaIdRequest.SerializeToString,
             post__pb2.GenericResponse.FromString,
             options,
             channel_credentials,
@@ -655,7 +655,7 @@ class PostsService(object):
             request,
             target,
             '/posts.PostsService/DeleteComment',
-            post__pb2.PostRequest.SerializeToString,
+            post__pb2.CommentRequest.SerializeToString,
             post__pb2.GenericResponse.FromString,
             options,
             channel_credentials,
