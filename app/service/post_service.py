@@ -1,4 +1,5 @@
 import grpc
+import os
 from concurrent import futures
 from dotenv import load_dotenv
 from ..proto_files import post_pb2, post_pb2_grpc
@@ -6,7 +7,10 @@ from ..repository.post_repository import PostRepository
 from ..utils.db_connection import get_db_engine
 from sqlalchemy.orm import sessionmaker
 from ..entity.user_entity import User
-from app.interceptors.auth_interceptor import AuthServerInterceptor
+from ..interceptors.auth_interceptor import AuthServerInterceptor
+from ..utils.s3_utils import upload_base64_to_s3, upload_file_to_s3, build_post_key
+
+from uuid import uuid4
 # Load environment variables
 load_dotenv()
 
@@ -32,6 +36,12 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
         if not post:
             return None
 
+        # Load media rows for this post from the shared media table
+        try:
+            media_rows = self.repository.get_post_media(post.id)
+        except Exception:
+            media_rows = []
+
         return post_pb2.Post(
             id=post.id,
             user_id=post.user_id,
@@ -43,28 +53,39 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             title=post.title,
             content=post.content,
             visibility=post.visibility or "",
-            property_type=post.property_type or "",
+            type=post.type or "",
             location=post.location or "",
-            map_location=post.map_location or "",
+            # Include new lat/lng
+            latitude=float(post.latitude) if getattr(post, 'latitude', None) is not None else 0.0,
+            longitude=float(post.longitude) if getattr(post, 'longitude', None) is not None else 0.0,
             price=float(post.price) if post.price else 0.0,
             status=post.status or "",
             created_at=self._convert_timestamp(post.created_at),
-            media=[self._convert_to_proto_media(m) for m in post.media],
+            media=[self._convert_to_proto_media(m, post_id=post.id) for m in media_rows],
             comments=[self._convert_to_proto_comment(c) for c in post.comments],
             like_count=len(post.likes),
             comment_count=len(post.comments)
         )
 
-    def _convert_to_proto_media(self, media):
+    def _convert_to_proto_media(self, media, post_id: int = 0):
+        # Support SQLAlchemy ORM objects and Core Row objects
+        def _get(field):
+            if hasattr(media, field):
+                return getattr(media, field)
+            mapping = getattr(media, "_mapping", None)
+            if mapping and field in mapping:
+                return mapping[field]
+            return None
+
         return post_pb2.PostMedia(
-            id=media.id,
-            post_id=media.post_id,
-            media_type=media.media_type,
-            media_url=media.media_url,
-            media_order=media.media_order,
-            media_size=media.media_size,
-            caption=media.caption or "",
-            uploaded_at=self._convert_timestamp(media.uploaded_at)
+            id=_get('id') or 0,
+            post_id=post_id or _get('post_id') or 0,
+            media_type=_get('media_type') or "",
+            media_url=_get('media_url') or "",
+            media_order=_get('media_order') or 0,
+            media_size=_get('media_size') or 0,
+            caption=_get('caption') or "",
+            uploaded_at=self._convert_timestamp(_get('uploaded_at'))
         )
 
     def _convert_to_proto_comment(self, comment):
@@ -97,39 +118,65 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 )
 
             try:
+                # Begin explicit transaction
                 post = self.repository.create_post(
                     user_id=request.user_id,
                     title=request.title,
                     content=request.content,
                     visibility=request.visibility,
-                    property_type=request.property_type,
+                    type=request.type,
                     location=request.location,
-                    map_location=request.map_location,
+                    latitude=getattr(request, 'latitude', None),
+                    longitude=getattr(request, 'longitude', None),
                     price=request.price,
-                    status=request.status
+                    status=request.status,
+                    is_anonymous=getattr(request, 'is_anonymous', False),
+                    commit=False,
                 )
 
+                created_media_ids = []
                 # Handle media uploads if any
                 for media in request.media:
-                    # For now, we'll create a simple URL from the media data
-                    # In a real implementation, you would save the media data to a file/S3
-                    # and use the resulting URL
-                    media_url = f"/media/{post.id}/{media.media_order}"
-                    
-                    try:
-                        self.repository.add_post_media(
-                            post_id=post.id,
-                            media_type=media.media_type,
-                            media_url=media_url,
-                            media_order=media.media_order,
-                            caption=media.caption
-                        )
-                    except Exception as media_error:
-                        # Log the error but continue with other media
-                        print(f"Error adding media: {str(media_error)}")
-                        continue
+                    # Require file_path for uploads (supports images and videos)
+                    file_path = getattr(media, 'file_path', None)
+                    content_type = getattr(media, 'content_type', None)
+                    file_name = getattr(media, 'file_name', None)
+                    if not file_path:
+                        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                        context.set_details("file_path is required for media upload")
+                        self.db.rollback()
+                        return post_pb2.PostResponse(success=False, message="file_path is required for media upload")
 
-                # Refresh post to get the added media
+                    # 1) Create media row first to obtain media_id (no commit yet)
+                    temp_url = ""
+                    inferred_type = media.media_type or (('video' if (content_type or '').startswith('video/') else 'image'))
+                    media_id = self.repository.add_post_media(
+                        post_id=post.id,
+                        media_type=inferred_type,
+                        media_url=temp_url,
+                        media_order=media.media_order,
+                        media_size=0,
+                        caption=media.caption,
+                        commit=False,
+                    )
+                    created_media_ids.append(media_id)
+
+                    # 2) Build S3 key and upload
+                    fn = file_name or (file_path.split('/')[-1] if file_path else None)
+                    key = build_post_key(post.id, media_id, fn, content_type)
+                    public_url, size_bytes = upload_file_to_s3(
+                        file_path=file_path,
+                        key=key,
+                        content_type=content_type,
+                    )
+
+                    # 3) Update media row (no commit yet)
+                    self.repository.update_media_url_size(media_id, public_url, size_bytes, commit=False)
+
+                # All operations succeeded; commit once
+                self.db.commit()
+
+                # Refresh post and return
                 post = self.repository.get_post(post.id)
                 return post_pb2.PostResponse(
                     success=True,
@@ -137,6 +184,8 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                     post=self._convert_to_proto_post(post)
                 )
             except Exception as e:
+                # Rollback if any step failed
+                self.db.rollback()
                 context.set_code(grpc.StatusCode.INTERNAL)
                 context.set_details(str(e))
                 return post_pb2.PostResponse(
@@ -182,11 +231,13 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 title=request.title,
                 content=request.content,
                 visibility=request.visibility,
-                property_type=request.property_type,
+                type=request.type,
                 location=request.location,
-                map_location=request.map_location,
+                latitude=getattr(request, 'latitude', None),
+                longitude=getattr(request, 'longitude', None),
                 price=request.price,
-                status=request.status
+                status=request.status,
+                is_anonymous=getattr(request, 'is_anonymous', None)
             )
             if not post:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -264,7 +315,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             limit = max(1, min(100, request.limit))
             
             posts, total = self.repository.search_posts(
-                property_type=request.property_type,
+                type=request.type,
                 location=request.location,
                 min_price=request.min_price,
                 max_price=request.max_price,
@@ -306,16 +357,39 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 )
 
             for media in request.media:
-                # Here you would implement media file handling
-                # For now, we'll assume media_url is provided
-                self.repository.add_post_media(
-                    post_id=post.id,
-                    media_type=media.media_type,
-                    media_url="placeholder_url",  # This would be replaced with actual upload logic
-                    media_order=media.media_order,
-                    media_size=0,  # This would be actual file size
-                    caption=media.caption
-                )
+                try:
+                    # 1) Create media row first to obtain media_id
+                    temp_url = ""
+                    media_id = self.repository.add_post_media(
+                        post_id=post.id,
+                        media_type=media.media_type or 'image',
+                        media_url=temp_url,
+                        media_order=media.media_order,
+                        media_size=0,
+                        caption=media.caption,
+                    )
+
+                    # 2) Build S3 key using media_id and upload
+                    file_path = getattr(media, 'file_path', None)
+                    content_type = getattr(media, 'content_type', None)
+                    if not file_path:
+                        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                        context.set_details("file_path is required for media upload")
+                        return post_pb2.PostResponse(success=False, message="file_path is required for media upload")
+
+                    file_name = getattr(media, 'file_name', None) or (file_path.split('/')[-1] if file_path else 'image')
+                    key = build_post_key(post.id, media_id, file_name, content_type)
+                    public_url, size_bytes = upload_file_to_s3(
+                        file_path=file_path,
+                        key=key,
+                        content_type=content_type,
+                    )
+
+                    # 3) Update media row
+                    self.repository.update_media_url_size(media_id, public_url, size_bytes)
+                except Exception as media_error:
+                    print(f"Error adding media: {str(media_error)}")
+                    continue
 
             # Refresh post to get updated media
             post = self.repository.get_post(request.post_id)
@@ -334,7 +408,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
 
     def DeletePostMedia(self, request, context):
         try:
-            success = self.repository.delete_post_media(request.post_id)
+            success = self.repository.delete_post_media(request.media_id)
             if not success:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Media not found")
@@ -460,20 +534,18 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             if not user:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.Comment()
+                return post_pb2.CommentResponse(success=False, message=f"User with id {request.user_id} not found")
 
             # Check if post exists
             post = self.repository.get_post(request.post_id)
             if not post:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details(f"Post with id {request.post_id} not found")
-                return post_pb2.Comment()
+                return post_pb2.CommentResponse(success=False, message=f"Post with id {request.post_id} not found")
 
             try:
-                # If parent_comment_id is 0, it's a new comment
-                # If it's > 0, it's a reply
-                # This ensures we don't convert 0 to None
-                parent_comment_id = request.parent_comment_id if request.parent_comment_id > 0 else 0
+                # If parent_comment_id is 0, treat as None for top-level comment
+                parent_comment_id = request.parent_comment_id if request.parent_comment_id > 0 else None
 
                 comment = self.repository.create_comment(
                     post_id=request.post_id,
@@ -481,15 +553,19 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                     comment_text=request.comment,
                     parent_comment_id=parent_comment_id
                 )
-                return self._convert_to_proto_comment(comment)
+                return post_pb2.CommentResponse(
+                    success=True,
+                    message="Comment created successfully",
+                    comment=self._convert_to_proto_comment(comment),
+                )
             except Exception as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
                 context.set_details(str(e))
-                return post_pb2.Comment()
+                return post_pb2.CommentResponse(success=False, message=str(e))
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
-            return post_pb2.Comment()
+            return post_pb2.CommentResponse(success=False, message=str(e))
 
     def UpdateComment(self, request, context):
         try:
@@ -501,17 +577,21 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             if not comment:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Comment not found")
-                return post_pb2.Comment()
+                return post_pb2.CommentResponse(success=False, message="Comment not found")
 
-            return self._convert_to_proto_comment(comment)
+            return post_pb2.CommentResponse(
+                success=True,
+                message="Comment updated successfully",
+                comment=self._convert_to_proto_comment(comment),
+            )
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
-            return post_pb2.Comment()
+            return post_pb2.CommentResponse(success=False, message=str(e))
 
     def DeleteComment(self, request, context):
         try:
-            success = self.repository.delete_comment(request.post_id)  # Using post_id as comment_id
+            success = self.repository.delete_comment(request.comment_id)
             if not success:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Comment not found")
@@ -679,48 +759,32 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 success=False,
                 message=f"Failed to unlike comment: {str(e)}"
             )
-import os
-import grpc
-from concurrent import futures
-from grpc_reflection.v1alpha import reflection
-from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 def serve():
-    import os
+    port = os.getenv("PORT", "50055")
+    engine = get_db_engine()
+    # Import models so they register with Base.metadata before create_all
+    from ..entity.post_entity import Post, PostLike, CommentLike  # noqa: F401
+    from ..entity.comment_entity import Comment  # noqa: F401
+    from ..entity.user_entity import User  # noqa: F401
+    from ..entity.media_entity import media  # noqa: F401
+    from ..utils.db_connection import Base
+
+    try:
+        Base.metadata.create_all(engine)
+        print("Database tables verified!")
+    except Exception as e:
+        print(f"[WARN] Could not verify/create tables: {e}")
+
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=10),
         interceptors=[AuthServerInterceptor()]
     )
     post_pb2_grpc.add_PostsServiceServicer_to_server(PostsService(), server)
-    health_servicer = health.HealthServicer()
-
-    health_pb2_grpc.add_HealthServicer_to_server(
-        health_servicer,
-        server,
-    )
-
-    health_servicer.set(
-        "",
-        health_pb2.HealthCheckResponse.SERVING,
-    )
-
-    SERVICE_NAMES = (
-        post_pb2.DESCRIPTOR.services_by_name[
-            "PostsService"
-        ].full_name,
-        health_pb2.DESCRIPTOR.services_by_name[
-        "Health"
-        ].full_name,
-        reflection.SERVICE_NAME,
-    )
-
-    reflection.enable_server_reflection(SERVICE_NAMES, server)
-
-    port = os.environ.get("PORT", "50055")
-
     server.add_insecure_port(f"0.0.0.0:{port}")
-
-    print(f"Starting post gRPC service on port {port}...")
-
     server.start()
+    print(f"Posts service started on port {port}")
     server.wait_for_termination()
+
+if __name__ == "__main__":
+    serve() 
