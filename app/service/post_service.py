@@ -14,8 +14,8 @@ from uuid import uuid4
 # Load environment variables
 load_dotenv()
 
-# Create database session
-SessionLocal = sessionmaker(bind=get_db_engine())
+# Create database session factory
+SessionLocal = sessionmaker(bind=get_db_engine(), expire_on_commit=False)
 
 def get_db():
     db = SessionLocal()
@@ -26,8 +26,31 @@ def get_db():
 
 class PostsService(post_pb2_grpc.PostsServiceServicer):
     def __init__(self):
-        self.db = next(get_db())
+        self._SessionLocal = SessionLocal
+        self._open_session()
+
+    def _open_session(self):
+        self.db = self._SessionLocal()
         self.repository = PostRepository(self.db)
+
+    def _reset_session(self):
+        """Recover from Neon SSL drops / poisoned transactions."""
+        try:
+            self.db.rollback()
+        except Exception:
+            pass
+        try:
+            self.db.close()
+        except Exception:
+            pass
+        self._open_session()
+
+    def _with_db(self, fn):
+        try:
+            return fn()
+        except Exception:
+            self._reset_session()
+            raise
 
     def _convert_timestamp(self, dt):
         return int(dt.timestamp()) if dt else 0
@@ -313,16 +336,24 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             page = max(1, request.page)
             # Ensure limit is between 1 and 100
             limit = max(1, min(100, request.limit))
-            
-            posts, total = self.repository.search_posts(
-                type=request.type,
-                location=request.location,
-                min_price=request.min_price,
-                max_price=request.max_price,
-                status=request.status,
-                page=page,
-                limit=limit
-            )
+
+            def _do():
+                return self.repository.search_posts(
+                    type=request.type,
+                    location=request.location,
+                    min_price=request.min_price,
+                    max_price=request.max_price,
+                    status=request.status,
+                    page=page,
+                    limit=limit
+                )
+
+            try:
+                posts, total = _do()
+            except Exception:
+                # Neon idle disconnect leaves a poisoned session — reset and retry once
+                self._reset_session()
+                posts, total = _do()
 
             # Calculate total pages
             total_pages = (total + limit - 1) // limit
@@ -338,6 +369,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 total_pages=total_pages
             )
         except Exception as e:
+            self._reset_session()
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return post_pb2.PostListResponse(

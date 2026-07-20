@@ -39,8 +39,11 @@ def get_db_engine():
         database_url,
         connect_args=connect_args,
         pool_pre_ping=True,
-        pool_recycle=300,
-        echo=True,
+        pool_recycle=280,  # Neon closes idle SSL well under 5 min
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        echo=False,
     )
 
     try:

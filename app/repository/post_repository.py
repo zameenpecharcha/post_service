@@ -163,9 +163,17 @@ class PostRepository:
             return posts, total
         except SQLAlchemyError as e:
             print(f"Database error in search_posts: {str(e)}")
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
             raise Exception(f"Database error while searching posts: {str(e)}")
         except Exception as e:
             print(f"Unexpected error in search_posts: {str(e)}")
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
             raise e
 
     # Media Operations
