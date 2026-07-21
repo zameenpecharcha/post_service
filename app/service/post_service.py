@@ -55,7 +55,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
     def _convert_timestamp(self, dt):
         return int(dt.timestamp()) if dt else 0
 
-    def _convert_to_proto_post(self, post):
+    def _convert_to_proto_post(self, post, liked_post_ids=None):
         if not post:
             return None
 
@@ -65,6 +65,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
         except Exception:
             media_rows = []
 
+        liked_ids = liked_post_ids or set()
         return post_pb2.Post(
             id=post.id,
             user_id=post.user_id,
@@ -86,8 +87,9 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             created_at=self._convert_timestamp(post.created_at),
             media=[self._convert_to_proto_media(m, post_id=post.id) for m in media_rows],
             comments=[self._convert_to_proto_comment(c) for c in post.comments],
-            like_count=len(post.likes),
-            comment_count=len(post.comments)
+            like_count=len(post.likes) if getattr(post, 'likes', None) is not None else 0,
+            comment_count=len(post.comments) if getattr(post, 'comments', None) is not None else 0,
+            is_liked=post.id in liked_ids,
         )
 
     def _convert_to_proto_media(self, media, post_id: int = 0):
@@ -314,10 +316,20 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 limit=request.limit
             )
 
+            viewer_id = getattr(request, "viewer_user_id", 0) or 0
+            liked_ids = set()
+            if viewer_id:
+                try:
+                    liked_ids = self.repository.get_liked_post_ids(
+                        viewer_id, [p.id for p in posts]
+                    )
+                except Exception:
+                    liked_ids = set()
+
             return post_pb2.PostListResponse(
                 success=True,
                 message="Posts retrieved successfully",
-                posts=[self._convert_to_proto_post(p) for p in posts],
+                posts=[self._convert_to_proto_post(p, liked_ids) for p in posts],
                 total_count=total,
                 page=request.page,
                 total_pages=(total + request.limit - 1) // request.limit
@@ -355,6 +367,16 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 self._reset_session()
                 posts, total = _do()
 
+            viewer_id = getattr(request, "viewer_user_id", 0) or 0
+            liked_ids = set()
+            if viewer_id:
+                try:
+                    liked_ids = self.repository.get_liked_post_ids(
+                        viewer_id, [p.id for p in posts]
+                    )
+                except Exception:
+                    liked_ids = set()
+
             # Calculate total pages
             total_pages = (total + limit - 1) // limit
             if total_pages == 0:
@@ -363,7 +385,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             return post_pb2.PostListResponse(
                 success=True,
                 message="Posts retrieved successfully",
-                posts=[self._convert_to_proto_post(p) for p in posts],
+                posts=[self._convert_to_proto_post(p, liked_ids) for p in posts],
                 total_count=total,
                 page=page,
                 total_pages=total_pages
@@ -375,6 +397,46 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             return post_pb2.PostListResponse(
                 success=False,
                 message=f"Failed to search posts: {str(e)}"
+            )
+
+    def TrendingPosts(self, request, context):
+        try:
+            limit = max(1, min(50, request.limit or 10))
+
+            def _do():
+                return self.repository.get_trending_posts(limit=limit)
+
+            try:
+                posts = _do()
+            except Exception:
+                self._reset_session()
+                posts = _do()
+
+            viewer_id = getattr(request, "viewer_user_id", 0) or 0
+            liked_ids = set()
+            if viewer_id:
+                try:
+                    liked_ids = self.repository.get_liked_post_ids(
+                        viewer_id, [p.id for p in posts]
+                    )
+                except Exception:
+                    liked_ids = set()
+
+            return post_pb2.PostListResponse(
+                success=True,
+                message="Trending posts retrieved successfully",
+                posts=[self._convert_to_proto_post(p, liked_ids) for p in posts],
+                total_count=len(posts),
+                page=1,
+                total_pages=1,
+            )
+        except Exception as e:
+            self._reset_session()
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return post_pb2.PostListResponse(
+                success=False,
+                message=f"Failed to get trending posts: {str(e)}"
             )
 
     def AddPostMedia(self, request, context):

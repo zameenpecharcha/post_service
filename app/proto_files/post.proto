@@ -27,6 +27,7 @@ message Post {
     int32 like_count = 19;
     int32 comment_count = 20;
     bool is_anonymous = 21;
+    bool is_liked = 24;
 }
 
 // Post Media Message
@@ -168,6 +169,7 @@ message GetPostsByUserRequest {
     int64 user_id = 1;
     int32 page = 2;
     int32 limit = 3;
+    int64 viewer_user_id = 4;
 }
 
 // Search Posts Request Message
@@ -179,6 +181,12 @@ message SearchPostsRequest {
     string status = 5;
     int32 page = 6;
     int32 limit = 7;
+    int64 viewer_user_id = 8;
+}
+
+message TrendingPostsRequest {
+    int32 limit = 1;
+    int64 viewer_user_id = 2;
 }
 
 message CommentRequest {
@@ -234,6 +242,7 @@ service PostsService {
     rpc DeletePost(PostRequest) returns (GenericResponse) {}
     rpc GetPostsByUser(GetPostsByUserRequest) returns (PostListResponse) {}
     rpc SearchPosts(SearchPostsRequest) returns (PostListResponse) {}
+    rpc TrendingPosts(TrendingPostsRequest) returns (PostListResponse) {}
 
     // Media Operations
     rpc AddPostMedia(PostMediaRequest) returns (PostResponse) {}

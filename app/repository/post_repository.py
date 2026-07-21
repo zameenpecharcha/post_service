@@ -176,6 +176,38 @@ class PostRepository:
                 pass
             raise e
 
+    def get_liked_post_ids(self, user_id: int, post_ids: List[int]) -> set:
+        if not user_id or not post_ids:
+            return set()
+        rows = (
+            self.db.query(PostLike.post_id)
+            .filter(PostLike.user_id == user_id, PostLike.post_id.in_(post_ids))
+            .all()
+        )
+        return {r[0] for r in rows}
+
+    def get_trending_posts(self, limit: int = 10) -> List[Post]:
+        try:
+            like_counts = (
+                self.db.query(PostLike.post_id, func.count(PostLike.id).label("cnt"))
+                .group_by(PostLike.post_id)
+                .subquery()
+            )
+            query = (
+                self.db.query(Post)
+                .outerjoin(like_counts, Post.id == like_counts.c.post_id)
+                .options(sqlalchemy.orm.joinedload(Post.user))
+                .order_by(func.coalesce(like_counts.c.cnt, 0).desc(), desc(Post.created_at))
+                .limit(limit)
+            )
+            return query.all()
+        except SQLAlchemyError as e:
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
+            raise Exception(f"Database error while fetching trending posts: {str(e)}")
+
     # Media Operations
     def add_post_media(self, post_id: int, media_type: str, media_url: str,
                       media_order: int, media_size: int = 0, caption: str = None,
