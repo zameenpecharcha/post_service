@@ -5,8 +5,11 @@ from ..utils.jwt_utils import verify_jwt_token
 
 class AuthServerInterceptor(grpc.ServerInterceptor):
     def intercept_service(self, continuation, handler_call_details):
-        metadata = dict(handler_call_details.invocation_metadata)
-        token = metadata.get("authorization", "").replace("Bearer ", "")
+        metadata = dict(handler_call_details.invocation_metadata or ())
+        raw = metadata.get("authorization") or metadata.get("Authorization") or ""
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="ignore")
+        token = str(raw).replace("Bearer ", "").strip()
 
         if not token:
             def deny_handler(request, context):
@@ -18,7 +21,6 @@ class AuthServerInterceptor(grpc.ServerInterceptor):
                 def deny_handler(request, context):
                     context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid token")
                 return grpc.unary_unary_rpc_method_handler(deny_handler)
-            # Optionally: inject user info into context via wrapper (more advanced)
             return continuation(handler_call_details)
 
         except Exception as e:
