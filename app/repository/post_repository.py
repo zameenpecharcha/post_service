@@ -462,6 +462,7 @@ class PostRepository:
         if comment:
             if comment_text is not None:
                 comment.comment = comment_text
+                comment.edited_at = datetime.utcnow()
                 comment.commented_at = datetime.utcnow()
             if status is not None:
                 comment.status = status
@@ -551,7 +552,7 @@ class PostRepository:
                     like = CommentLike(
                         comment_id=comment_id,
                         user_id=user_id,
-                        reaction_type=reaction_type,
+                        reaction_type=reaction_type or 'like',
                         liked_at=datetime.utcnow()
                     )
                     self.db.add(like)
@@ -562,7 +563,15 @@ class PostRepository:
                 except SQLAlchemyError as e:
                     self.db.rollback()
                     raise Exception(f"Database error while adding like: {str(e)}")
-            
+            elif reaction_type and existing_like.reaction_type != reaction_type:
+                try:
+                    existing_like.reaction_type = reaction_type
+                    existing_like.liked_at = datetime.utcnow()
+                    self.db.commit()
+                except SQLAlchemyError as e:
+                    self.db.rollback()
+                    raise Exception(f"Database error while updating reaction: {str(e)}")
+
             # Get fresh comment data with updated like count
             try:
                 self.db.refresh(comment)

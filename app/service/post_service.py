@@ -167,7 +167,9 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             added_at=self._convert_timestamp(comment.added_at),
             commented_at=self._convert_timestamp(comment.commented_at),
             replies=[self._convert_to_proto_comment(r) for r in comment.replies],
-            like_count=len(comment.likes)
+            like_count=len(comment.likes) if comment.likes is not None else 0,
+            is_anonymous=bool(getattr(comment, 'is_anonymous', False)),
+            edited_at=self._convert_timestamp(getattr(comment, 'edited_at', None)),
         )
 
     def CreatePost(self, request, context):
