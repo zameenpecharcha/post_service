@@ -61,43 +61,58 @@ class PostRepository:
                    latitude: float = None, longitude: float = None) -> Optional[Post]:
         try:
             post = self.get_post(post_id)
-            if post:
-                if title is not None:
-                    post.title = title
-                if content is not None:
-                    post.content = content
-                if visibility is not None:
-                    post.visibility = visibility
-                if type is not None:
-                    post.type = type
-                if location is not None:
-                    post.location = location
-                # No map_location anymore
-                if latitude is not None:
-                    post.latitude = latitude
-                if longitude is not None:
-                    post.longitude = longitude
-                if price is not None:
-                    post.price = price
-                if status is not None:
-                    post.status = status
-                if is_anonymous is not None:
-                    post.is_anonymous = is_anonymous
-                self.db.commit()
-                self.db.refresh(post)
+            if not post:
+                return None
+
+            # Only apply fields that were explicitly provided (None = leave unchanged).
+            if title is not None:
+                post.title = title
+            if content is not None:
+                post.content = content
+            if visibility is not None:
+                post.visibility = visibility
+            if type is not None:
+                post.type = type
+            if location is not None:
+                post.location = location
+            if latitude is not None:
+                post.latitude = latitude
+            if longitude is not None:
+                post.longitude = longitude
+            if price is not None:
+                post.price = price
+            if status is not None:
+                post.status = status
+            if is_anonymous is not None:
+                post.is_anonymous = is_anonymous
+
+            self.db.add(post)
+            self.db.commit()
+            self.db.refresh(post)
             return post
         except SQLAlchemyError as e:
             self.db.rollback()
             raise Exception(f"Database error while updating post: {str(e)}")
 
     def delete_post(self, post_id: int) -> bool:
+        """Hard-delete post and related media rows. Comments/likes cascade via FK/ORM."""
         try:
             post = self.get_post(post_id)
-            if post:
-                self.db.delete(post)
-                self.db.commit()
-                return True
-            return False
+            if not post:
+                return False
+
+            # Shared media table is not ORM-cascaded — remove post media explicitly.
+            self.db.execute(
+                MediaTable.delete().where(
+                    and_(
+                        MediaTable.c.context_id == post_id,
+                        MediaTable.c.context_type == 'post',
+                    )
+                )
+            )
+            self.db.delete(post)
+            self.db.commit()
+            return True
         except SQLAlchemyError as e:
             self.db.rollback()
             raise Exception(f"Database error while deleting post: {str(e)}")
@@ -267,6 +282,57 @@ class PostRepository:
             return result
         except SQLAlchemyError as e:
             raise Exception(f"Database error while fetching media: {str(e)}")
+
+    def get_posts_media_map(self, post_ids: List[int]) -> dict:
+        """Batch-load media for many posts → {post_id: [rows]}."""
+        if not post_ids:
+            return {}
+        try:
+            stmt = (
+                select(MediaTable)
+                .where(and_(
+                    MediaTable.c.context_id.in_(post_ids),
+                    MediaTable.c.context_type == 'post',
+                ))
+                .order_by(MediaTable.c.context_id, MediaTable.c.media_order)
+            )
+            rows = self.db.execute(stmt).fetchall()
+            out: dict = {pid: [] for pid in post_ids}
+            for row in rows:
+                mapping = getattr(row, "_mapping", None) or {}
+                pid = mapping.get("context_id") if mapping else getattr(row, "context_id", None)
+                if pid is None:
+                    continue
+                out.setdefault(int(pid), []).append(row)
+            return out
+        except SQLAlchemyError as e:
+            raise Exception(f"Database error while batch-fetching media: {str(e)}")
+
+    def get_posts_like_counts(self, post_ids: List[int]) -> dict:
+        if not post_ids:
+            return {}
+        rows = (
+            self.db.query(PostLike.post_id, func.count(PostLike.id))
+            .filter(PostLike.post_id.in_(post_ids))
+            .group_by(PostLike.post_id)
+            .all()
+        )
+        return {int(pid): int(cnt) for pid, cnt in rows}
+
+    def get_posts_comment_counts(self, post_ids: List[int]) -> dict:
+        """Top-level comments only (parent_comment_id IS NULL)."""
+        if not post_ids:
+            return {}
+        rows = (
+            self.db.query(Comment.post_id, func.count(Comment.id))
+            .filter(
+                Comment.post_id.in_(post_ids),
+                Comment.parent_comment_id.is_(None),
+            )
+            .group_by(Comment.post_id)
+            .all()
+        )
+        return {int(pid): int(cnt) for pid, cnt in rows}
 
     # Like Operations
     def like_post(self, post_id: int, user_id: int, reaction_type: str = 'like') -> Optional[Post]:

@@ -55,17 +55,57 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
     def _convert_timestamp(self, dt):
         return int(dt.timestamp()) if dt else 0
 
-    def _convert_to_proto_post(self, post, liked_post_ids=None):
+    def _convert_to_proto_post(
+        self,
+        post,
+        liked_post_ids=None,
+        include_comments=True,
+        repository=None,
+        include_media=True,
+        media_rows=None,
+        like_count=None,
+        comment_count=None,
+    ):
         if not post:
             return None
 
-        # Load media rows for this post from the shared media table
-        try:
-            media_rows = self.repository.get_post_media(post.id)
-        except Exception:
-            media_rows = []
+        repo = repository or self.repository
+        # Prefer pre-batched media/counts (Search/Trending) to avoid N+1 queries.
+        if media_rows is None:
+            if include_media:
+                try:
+                    media_rows = repo.get_post_media(post.id)
+                except Exception:
+                    media_rows = []
+            else:
+                media_rows = []
 
         liked_ids = liked_post_ids or set()
+        comments = []
+        if include_comments:
+            try:
+                comments = [self._convert_to_proto_comment(c) for c in (post.comments or [])]
+            except Exception:
+                comments = []
+
+        if comment_count is None:
+            try:
+                comment_count = repo.get_post_comment_count(post.id)
+            except Exception:
+                try:
+                    comment_count = len(post.comments) if getattr(post, 'comments', None) is not None else 0
+                except Exception:
+                    comment_count = 0
+
+        if like_count is None:
+            try:
+                like_count = repo.get_post_like_count(post.id)
+            except Exception:
+                try:
+                    like_count = len(post.likes) if getattr(post, 'likes', None) is not None else 0
+                except Exception:
+                    like_count = 0
+
         return post_pb2.Post(
             id=post.id,
             user_id=post.user_id,
@@ -74,8 +114,8 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             user_email=post.user.email if post.user else "",
             user_phone=post.user.phone if post.user else "",
             user_role=post.user.role if post.user else "",
-            title=post.title,
-            content=post.content,
+            title=post.title or "",
+            content=post.content or "",
             visibility=post.visibility or "",
             type=post.type or "",
             location=post.location or "",
@@ -85,10 +125,10 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             price=float(post.price) if post.price else 0.0,
             status=post.status or "",
             created_at=self._convert_timestamp(post.created_at),
-            media=[self._convert_to_proto_media(m, post_id=post.id) for m in media_rows],
-            comments=[self._convert_to_proto_comment(c) for c in post.comments],
-            like_count=len(post.likes) if getattr(post, 'likes', None) is not None else 0,
-            comment_count=len(post.comments) if getattr(post, 'comments', None) is not None else 0,
+            media=[self._convert_to_proto_media(m, post_id=post.id) for m in (media_rows or [])],
+            comments=comments,
+            like_count=int(like_count or 0),
+            comment_count=int(comment_count or 0),
             is_liked=post.id in liked_ids,
         )
 
@@ -251,19 +291,24 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
 
     def UpdatePost(self, request, context):
         try:
-            post = self.repository.update_post(
-                post_id=request.post_id,
-                title=request.title,
-                content=request.content,
-                visibility=request.visibility,
-                type=request.type,
-                location=request.location,
-                latitude=getattr(request, 'latitude', None),
-                longitude=getattr(request, 'longitude', None),
-                price=request.price,
-                status=request.status,
-                is_anonymous=getattr(request, 'is_anonymous', None)
-            )
+            # Proto3 scalar defaults ("" / 0 / False) are indistinguishable from
+            # "unset" unless we only apply fields that were explicitly set.
+            kwargs = {}
+            for field, value in request.ListFields():
+                name = field.name
+                if name == "post_id":
+                    continue
+                kwargs[name] = value
+
+            if not kwargs:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("No fields to update")
+                return post_pb2.PostResponse(
+                    success=False,
+                    message="No fields to update",
+                )
+
+            post = self.repository.update_post(post_id=request.post_id, **kwargs)
             if not post:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details("Post not found")
@@ -275,7 +320,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             return post_pb2.PostResponse(
                 success=True,
                 message="Post updated successfully",
-                post=self._convert_to_proto_post(post)
+                post=self._convert_to_proto_post(post, include_comments=False)
             )
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
@@ -326,10 +371,31 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 except Exception:
                     liked_ids = set()
 
+            post_ids = [p.id for p in posts]
+            media_map = {}
+            like_map = {}
+            comment_map = {}
+            try:
+                media_map = self.repository.get_posts_media_map(post_ids)
+                like_map = self.repository.get_posts_like_counts(post_ids)
+                comment_map = self.repository.get_posts_comment_counts(post_ids)
+            except Exception:
+                pass
+
             return post_pb2.PostListResponse(
                 success=True,
                 message="Posts retrieved successfully",
-                posts=[self._convert_to_proto_post(p, liked_ids) for p in posts],
+                posts=[
+                    self._convert_to_proto_post(
+                        p,
+                        liked_ids,
+                        include_comments=False,
+                        media_rows=media_map.get(p.id, []),
+                        like_count=like_map.get(p.id, 0),
+                        comment_count=comment_map.get(p.id, 0),
+                    )
+                    for p in posts
+                ],
                 total_count=total,
                 page=request.page,
                 total_pages=(total + request.limit - 1) // request.limit
@@ -343,14 +409,16 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             )
 
     def SearchPosts(self, request, context):
+        # Per-request session: Home fires search + trending in parallel; a shared
+        # SQLAlchemy session is not thread-safe and causes intermittent INTERNAL errors.
+        db = self._SessionLocal()
+        repo = PostRepository(db)
         try:
-            # Ensure page number is at least 1
             page = max(1, request.page)
-            # Ensure limit is between 1 and 100
             limit = max(1, min(100, request.limit))
 
             def _do():
-                return self.repository.search_posts(
+                return repo.search_posts(
                     type=request.type,
                     location=request.location,
                     min_price=request.min_price,
@@ -363,81 +431,130 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             try:
                 posts, total = _do()
             except Exception:
-                # Neon idle disconnect leaves a poisoned session — reset and retry once
-                self._reset_session()
+                db.rollback()
                 posts, total = _do()
 
             viewer_id = getattr(request, "viewer_user_id", 0) or 0
             liked_ids = set()
             if viewer_id:
                 try:
-                    liked_ids = self.repository.get_liked_post_ids(
-                        viewer_id, [p.id for p in posts]
-                    )
+                    liked_ids = repo.get_liked_post_ids(viewer_id, [p.id for p in posts])
                 except Exception:
                     liked_ids = set()
 
-            # Calculate total pages
             total_pages = (total + limit - 1) // limit
             if total_pages == 0:
                 total_pages = 1
 
+            post_ids = [p.id for p in posts]
+            media_map = {}
+            like_map = {}
+            comment_map = {}
+            try:
+                media_map = repo.get_posts_media_map(post_ids)
+                like_map = repo.get_posts_like_counts(post_ids)
+                comment_map = repo.get_posts_comment_counts(post_ids)
+            except Exception:
+                pass
+
             return post_pb2.PostListResponse(
                 success=True,
                 message="Posts retrieved successfully",
-                posts=[self._convert_to_proto_post(p, liked_ids) for p in posts],
+                posts=[
+                    self._convert_to_proto_post(
+                        p,
+                        liked_ids,
+                        include_comments=False,
+                        repository=repo,
+                        media_rows=media_map.get(p.id, []),
+                        like_count=like_map.get(p.id, 0),
+                        comment_count=comment_map.get(p.id, 0),
+                    )
+                    for p in posts
+                ],
                 total_count=total,
                 page=page,
                 total_pages=total_pages
             )
         except Exception as e:
-            self._reset_session()
+            try:
+                db.rollback()
+            except Exception:
+                pass
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return post_pb2.PostListResponse(
                 success=False,
                 message=f"Failed to search posts: {str(e)}"
             )
+        finally:
+            db.close()
 
     def TrendingPosts(self, request, context):
+        db = self._SessionLocal()
+        repo = PostRepository(db)
         try:
             limit = max(1, min(50, request.limit or 10))
 
             def _do():
-                return self.repository.get_trending_posts(limit=limit)
+                return repo.get_trending_posts(limit=limit)
 
             try:
                 posts = _do()
             except Exception:
-                self._reset_session()
+                db.rollback()
                 posts = _do()
 
             viewer_id = getattr(request, "viewer_user_id", 0) or 0
             liked_ids = set()
             if viewer_id:
                 try:
-                    liked_ids = self.repository.get_liked_post_ids(
-                        viewer_id, [p.id for p in posts]
-                    )
+                    liked_ids = repo.get_liked_post_ids(viewer_id, [p.id for p in posts])
                 except Exception:
                     liked_ids = set()
+
+            post_ids = [p.id for p in posts]
+            like_map = {}
+            comment_map = {}
+            try:
+                like_map = repo.get_posts_like_counts(post_ids)
+                comment_map = repo.get_posts_comment_counts(post_ids)
+            except Exception:
+                pass
 
             return post_pb2.PostListResponse(
                 success=True,
                 message="Trending posts retrieved successfully",
-                posts=[self._convert_to_proto_post(p, liked_ids) for p in posts],
+                posts=[
+                    self._convert_to_proto_post(
+                        p,
+                        liked_ids,
+                        include_comments=False,
+                        repository=repo,
+                        include_media=False,
+                        media_rows=[],
+                        like_count=like_map.get(p.id, 0),
+                        comment_count=comment_map.get(p.id, 0),
+                    )
+                    for p in posts
+                ],
                 total_count=len(posts),
                 page=1,
                 total_pages=1,
             )
         except Exception as e:
-            self._reset_session()
+            try:
+                db.rollback()
+            except Exception:
+                pass
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return post_pb2.PostListResponse(
                 success=False,
                 message=f"Failed to get trending posts: {str(e)}"
             )
+        finally:
+            db.close()
 
     def AddPostMedia(self, request, context):
         try:
