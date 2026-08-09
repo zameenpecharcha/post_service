@@ -1,45 +1,24 @@
-from sqlalchemy import create_engine, text
-import os
-from dotenv import load_dotenv
+"""
+Database bootstrap is managed by api_gateway/create_tables_updated.sql.
+This module only verifies connectivity — it does not create or drop tables.
+"""
 import logging
-from ..entity.post_entity import Base, Post
 
-# Set up logging
+from .db_connection import get_db_engine
+from sqlalchemy import text
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def init_database():
-    # Load environment variables
-    load_dotenv()
 
-    # Get database configuration
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_NAME = os.getenv("DB_NAME", "postgres")  # Using postgres as default
-    DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
-    DB_PORT = os.getenv("DB_PORT", "5432")
+def init_database() -> bool:
+    engine = get_db_engine()
+    with engine.connect() as conn:
+        conn.execute(text('SELECT 1 FROM "post".posts LIMIT 0'))
+        conn.commit()
+    logger.info('Verified post schema tables exist (run create_tables_updated.sql if missing).')
+    return True
 
-    try:
-        # Connect to database
-        engine = create_engine(f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
-        
-        # Drop existing tables with CASCADE
-        with engine.connect() as connection:
-            # Drop the post_likes table first
-            connection.execute(text("DROP TABLE IF EXISTS post_likes CASCADE"))
-            connection.execute(text("DROP TABLE IF EXISTS posts CASCADE"))
-            connection.commit()
-            logger.info("Dropped existing tables")
-        
-        # Create all tables from scratch
-        Base.metadata.create_all(bind=engine)
-        logger.info("Created all tables successfully")
-        
-        return True
-
-    except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}")
-        raise
 
 if __name__ == "__main__":
-    init_database() 
+    init_database()

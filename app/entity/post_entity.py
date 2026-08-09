@@ -1,57 +1,88 @@
-from sqlalchemy import Column, BigInteger, String, TIMESTAMP, ForeignKey, Text, Numeric, Integer, Boolean, Float
+from sqlalchemy import (
+    Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, BigInteger,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from uuid import uuid4
+
 from ..utils.db_connection import Base
-from .comment_entity import Comment
+from ..utils.schema_helpers import POST_SCHEMA, utcnow
+
+POSTS_TABLE = f"{POST_SCHEMA}.posts"
+
 
 class Post(Base):
     __tablename__ = "posts"
+    __table_args__ = {"schema": POST_SCHEMA}
 
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    content = Column(String(2000))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    post_code = Column(String(30), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
     title = Column(String(255))
-    visibility = Column(String(50))
-    type = Column(String(50))
-    location = Column(Text)
-    latitude = Column(Float)
-    longitude = Column(Float)
-    # map_location removed (latitude/longitude now used)
-    price = Column(Numeric(15,2))
-    status = Column(String(50))
-    is_anonymous = Column(Boolean, default=False)
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    content = Column(Text)
+    post_type = Column(String(30), nullable=False, default="TEXT")
+    property_id = Column(UUID(as_uuid=True))
+    visibility = Column(String(30), nullable=False, default="PUBLIC")
+    location = Column(String(255))
+    latitude = Column(Numeric(10, 7))
+    longitude = Column(Numeric(10, 7))
+    price = Column(Numeric(18, 2))
+    currency = Column(String(10), default="INR")
+    is_anonymous = Column(Boolean, nullable=False, default=False)
+    allow_comments = Column(Boolean, nullable=False, default=True)
+    allow_share = Column(Boolean, nullable=False, default=True)
+    allow_reactions = Column(Boolean, nullable=False, default=True)
+    status = Column(String(30), nullable=False, default="DRAFT")
+    like_count = Column(Integer, nullable=False, default=0)
+    comment_count = Column(Integer, nullable=False, default=0)
+    share_count = Column(Integer, nullable=False, default=0)
+    view_count = Column(BigInteger, nullable=False, default=0)
+    report_count = Column(Integer, nullable=False, default=0)
+    is_pinned = Column(Boolean, nullable=False, default=False)
+    pinned_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at = Column(DateTime(timezone=True))
 
-    # Relationships
-    user = relationship("User", back_populates="posts")
-    # media removed; use shared `media` table
     likes = relationship("PostLike", back_populates="post", cascade="all, delete-orphan")
     comments = relationship("Comment", back_populates="post", cascade="all, delete-orphan")
 
-# Unified media table exists elsewhere; no PostMedia model here
 
 class PostLike(Base):
     __tablename__ = "post_likes"
+    __table_args__ = {"schema": POST_SCHEMA}
 
-    id = Column(BigInteger, primary_key=True)
-    post_id = Column(BigInteger, ForeignKey('posts.id', ondelete='CASCADE'), nullable=False)
-    reaction_type = Column(String(20))
-    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    liked_at = Column(TIMESTAMP, default=datetime.utcnow)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    post_id = Column(UUID(as_uuid=True), ForeignKey(f"{POSTS_TABLE}.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    reaction_type = Column(String(20), nullable=False, default="LIKE")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
-    # Relationships
     post = relationship("Post", back_populates="likes")
-    user = relationship("User", back_populates="post_likes")
+
 
 class CommentLike(Base):
-    __tablename__ = "post_comment_likes"
+    __tablename__ = "comment_likes"
+    __table_args__ = {"schema": POST_SCHEMA}
 
-    id = Column(BigInteger, primary_key=True)
-    comment_id = Column(BigInteger, ForeignKey('comments.id', ondelete='CASCADE'), nullable=False)
-    reaction_type = Column(String(20))
-    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    liked_at = Column(TIMESTAMP, default=datetime.utcnow)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    comment_id = Column(UUID(as_uuid=True), ForeignKey(f"{POST_SCHEMA}.comments.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    reaction_type = Column(String(20), nullable=False, default="LIKE")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
-    # Relationships
     comment = relationship("Comment", back_populates="likes")
-    user = relationship("User", back_populates="comment_likes") 
+
+
+class PostShare(Base):
+    __tablename__ = "post_shares"
+    __table_args__ = {"schema": POST_SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    share_code = Column(String(30), nullable=False, unique=True)
+    post_id = Column(UUID(as_uuid=True), ForeignKey(f"{POSTS_TABLE}.id", ondelete="CASCADE"), nullable=False)
+    shared_by = Column(UUID(as_uuid=True), nullable=False)
+    share_type = Column(String(20), nullable=False, default="SHARE")
+    caption = Column(Text)
+    visibility = Column(String(30), nullable=False, default="PUBLIC")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

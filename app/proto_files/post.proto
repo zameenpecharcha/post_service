@@ -4,8 +4,8 @@ package posts;
 
 // Post Message
 message Post {
-    int64 id = 1;
-    int64 user_id = 2;
+    string id = 1;
+    string user_id = 2;
     string user_first_name = 3;
     string user_last_name = 4;
     string user_email = 5;
@@ -18,7 +18,6 @@ message Post {
     string location = 12;
     double latitude = 22;
     double longitude = 23;
-    // map_location removed
     double price = 14;
     string status = 15;
     int64 created_at = 16;
@@ -28,12 +27,19 @@ message Post {
     int32 comment_count = 20;
     bool is_anonymous = 21;
     bool is_liked = 24;
+    string post_code = 25;
+    string property_id = 26;
+    string currency = 27;
+    bool is_pinned = 28;
+    int64 pinned_at = 29;
+    int32 share_count = 30;
+    int64 view_count = 31;
 }
 
 // Post Media Message
 message PostMedia {
-    int64 id = 1;
-    int64 post_id = 2;
+    string id = 1;
+    string post_id = 2;
     string media_type = 3;
     string media_url = 4;
     int32 media_order = 5;
@@ -44,11 +50,11 @@ message PostMedia {
 
 // Comment Message
 message Comment {
-    int64 id = 1;
-    int64 post_id = 2;
-    int64 parent_comment_id = 3;
+    string id = 1;
+    string post_id = 2;
+    string parent_comment_id = 3;
     string comment = 4;
-    int64 user_id = 5;
+    string user_id = 5;
     string user_first_name = 6;
     string user_last_name = 7;
     string user_role = 8;
@@ -61,19 +67,54 @@ message Comment {
     int64 edited_at = 15;
 }
 
-// Post List Message
-message PostList {
-    repeated Post posts = 1;
+// Post Like User (for GetPostLikes)
+message PostLikeUser {
+    string user_id = 1;
+    string first_name = 2;
+    string last_name = 3;
+    string user_role = 4;
+    string reaction_type = 5;
+    int64 liked_at = 6;
 }
 
-// Post Request Message
+// Post Share
+message PostShare {
+    string id = 1;
+    string share_code = 2;
+    string post_id = 3;
+    string shared_by = 4;
+    string share_type = 5;
+    string caption = 6;
+    string visibility = 7;
+    int64 created_at = 8;
+    Post post = 9;
+}
+
+// Report
+message Report {
+    string id = 1;
+    string report_code = 2;
+    string entity_type = 3;
+    string entity_id = 4;
+    string reported_by = 5;
+    string reported_user_id = 6;
+    string reason_code = 7;
+    string description = 8;
+    string status = 9;
+    string priority = 10;
+    int64 created_at = 11;
+}
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
+
 message PostRequest {
-    int64 post_id = 1;
+    string post_id = 1;
 }
 
-// Post Create Request Message
 message PostCreateRequest {
-    int64 user_id = 1;
+    string user_id = 1;
     string title = 2;
     string content = 3;
     string visibility = 4;
@@ -81,30 +122,27 @@ message PostCreateRequest {
     string location = 6;
     double latitude = 12;
     double longitude = 13;
-    // map_location removed
     double price = 8;
     string status = 9;
     bool is_anonymous = 11;
     repeated PostMediaUpload media = 10;
+    string property_id = 14;
+    string currency = 15;
 }
 
-// Post Media Upload Message
 message PostMediaUpload {
     string media_type = 1;
     bytes media_data = 2;
     int32 media_order = 3;
     string caption = 4;
-    // Optional fields for base64 uploads with metadata
     string base64_data = 5;
     string file_name = 6;
     string content_type = 7;
-    // File-path based upload (server-accessible path)
     string file_path = 8;
 }
 
-// Post Update Request Message
 message PostUpdateRequest {
-    int64 post_id = 1;
+    string post_id = 1;
     string title = 2;
     string content = 3;
     string visibility = 4;
@@ -112,67 +150,89 @@ message PostUpdateRequest {
     string location = 6;
     double latitude = 11;
     double longitude = 12;
-    // map_location removed
     double price = 8;
     string status = 9;
     bool is_anonymous = 10;
+    string property_id = 13;
+    string currency = 14;
 }
 
-// Post Media Request Message
 message PostMediaRequest {
-    int64 post_id = 1;
+    string post_id = 1;
     repeated PostMediaUpload media = 2;
+    string uploaded_by = 3;
 }
 
 message MediaIdRequest {
-    int64 media_id = 1;
+    string media_id = 1;
 }
 
-// Like Request Message
 message LikeRequest {
-    int64 post_id = 1;  // Changed from 'id' to 'post_id' for clarity
-    int64 user_id = 2;
+    string post_id = 1;
+    string user_id = 2;
     string reaction_type = 3;
 }
 
-// Comment Like Request Message
 message CommentLikeRequest {
-    int64 comment_id = 1;
-    int64 user_id = 2;
+    string comment_id = 1;
+    string user_id = 2;
     string reaction_type = 3;
 }
 
-// Comment Create Request Message
 message CommentCreateRequest {
-    int64 post_id = 1;
-    int64 parent_comment_id = 2;
+    string post_id = 1;
+    string parent_comment_id = 2;
     string comment = 3;
-    int64 user_id = 4;
+    string user_id = 4;
+    bool is_anonymous = 5;
 }
 
-// Comment Update Request Message
 message CommentUpdateRequest {
-    int64 comment_id = 1;
+    string comment_id = 1;
     string comment = 2;
     string status = 3;
 }
 
-// Get Comments Request Message
 message GetCommentsRequest {
-    int64 post_id = 1;
+    string post_id = 1;
     int32 page = 2;
     int32 limit = 3;
 }
 
-// Get Posts By User Request Message
 message GetPostsByUserRequest {
-    int64 user_id = 1;
+    string user_id = 1;
     int32 page = 2;
     int32 limit = 3;
-    int64 viewer_user_id = 4;
+    string viewer_user_id = 4;
 }
 
-// Search Posts Request Message
+message GetMyPostsRequest {
+    string user_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+}
+
+message GetPublicPostsRequest {
+    int32 page = 1;
+    int32 limit = 2;
+    string viewer_user_id = 3;
+}
+
+message GetPropertyPostsRequest {
+    string property_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+    string viewer_user_id = 4;
+}
+
+message GetBuilderPostsRequest {
+    string builder_user_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+    string viewer_user_id = 4;
+    repeated string user_ids = 5;
+}
+
 message SearchPostsRequest {
     string type = 1;
     string location = 2;
@@ -181,26 +241,109 @@ message SearchPostsRequest {
     string status = 5;
     int32 page = 6;
     int32 limit = 7;
-    int64 viewer_user_id = 8;
+    string viewer_user_id = 8;
+    string query = 9;
+    string hashtag = 10;
 }
 
 message TrendingPostsRequest {
     int32 limit = 1;
-    int64 viewer_user_id = 2;
+    string viewer_user_id = 2;
 }
 
 message CommentRequest {
-    int64 comment_id = 1;
+    string comment_id = 1;
 }
 
-// Post Response Message
+message GetRepliesRequest {
+    string comment_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+}
+
+message PostOwnerRequest {
+    string post_id = 1;
+    string user_id = 2;
+}
+
+message GetPostLikesRequest {
+    string post_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+}
+
+message CheckLikeStatusRequest {
+    string post_id = 1;
+    string user_id = 2;
+}
+
+message SharePostRequest {
+    string post_id = 1;
+    string shared_by = 2;
+    string share_type = 3;
+    string caption = 4;
+    string visibility = 5;
+}
+
+message GetSharedPostsRequest {
+    string user_id = 1;
+    int32 page = 2;
+    int32 limit = 3;
+    string viewer_user_id = 4;
+}
+
+message DeleteSharedPostRequest {
+    string share_id = 1;
+    string user_id = 2;
+}
+
+message ReportPostRequest {
+    string post_id = 1;
+    string reported_by = 2;
+    string reported_user_id = 3;
+    string reason_code = 4;
+    string description = 5;
+}
+
+message ReportCommentRequest {
+    string comment_id = 1;
+    string reported_by = 2;
+    string reported_user_id = 3;
+    string reason_code = 4;
+    string description = 5;
+}
+
+message ReportPropertyRequest {
+    string property_id = 1;
+    string reported_by = 2;
+    string reported_user_id = 3;
+    string reason_code = 4;
+    string description = 5;
+}
+
+message ReportUserRequest {
+    string user_id = 1;
+    string reported_by = 2;
+    string reason_code = 3;
+    string description = 4;
+}
+
+message GetMyReportsRequest {
+    string reported_by = 1;
+    int32 page = 2;
+    int32 limit = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Responses
+// ---------------------------------------------------------------------------
+
 message PostResponse {
     bool success = 1;
     string message = 2;
     Post post = 3;
 }
 
-// Post List Response Message
 message PostListResponse {
     bool success = 1;
     string message = 2;
@@ -210,7 +353,6 @@ message PostListResponse {
     int32 total_pages = 6;
 }
 
-// Comment List Response Message
 message CommentListResponse {
     bool success = 1;
     string message = 2;
@@ -220,43 +362,115 @@ message CommentListResponse {
     int32 total_pages = 6;
 }
 
-// Generic Response Message
-message GenericResponse {
-    bool success = 1;
-    string message = 2;
-}
-
-// Comment Response Message
 message CommentResponse {
     bool success = 1;
     string message = 2;
     Comment comment = 3;
 }
 
-// Posts Service Definition
+message GenericResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message PostLikeListResponse {
+    bool success = 1;
+    string message = 2;
+    repeated PostLikeUser likes = 3;
+    int32 total_count = 4;
+    int32 page = 5;
+    int32 total_pages = 6;
+}
+
+message CheckLikeStatusResponse {
+    bool success = 1;
+    string message = 2;
+    bool is_liked = 3;
+    string reaction_type = 4;
+}
+
+message PostShareResponse {
+    bool success = 1;
+    string message = 2;
+    PostShare share = 3;
+}
+
+message PostShareListResponse {
+    bool success = 1;
+    string message = 2;
+    repeated PostShare shares = 3;
+    int32 total_count = 4;
+    int32 page = 5;
+    int32 total_pages = 6;
+}
+
+message ReportResponse {
+    bool success = 1;
+    string message = 2;
+    Report report = 3;
+}
+
+message ReportListResponse {
+    bool success = 1;
+    string message = 2;
+    repeated Report reports = 3;
+    int32 total_count = 4;
+    int32 page = 5;
+    int32 total_pages = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
 service PostsService {
-    // Post Operations
+    // Post operations
     rpc CreatePost(PostCreateRequest) returns (PostResponse) {}
     rpc GetPost(PostRequest) returns (PostResponse) {}
     rpc UpdatePost(PostUpdateRequest) returns (PostResponse) {}
     rpc DeletePost(PostRequest) returns (GenericResponse) {}
     rpc GetPostsByUser(GetPostsByUserRequest) returns (PostListResponse) {}
+    rpc GetMyPosts(GetMyPostsRequest) returns (PostListResponse) {}
+    rpc GetPublicPosts(GetPublicPostsRequest) returns (PostListResponse) {}
+    rpc GetPropertyPosts(GetPropertyPostsRequest) returns (PostListResponse) {}
+    rpc GetBuilderPosts(GetBuilderPostsRequest) returns (PostListResponse) {}
     rpc SearchPosts(SearchPostsRequest) returns (PostListResponse) {}
     rpc TrendingPosts(TrendingPostsRequest) returns (PostListResponse) {}
+    rpc PinPost(PostOwnerRequest) returns (PostResponse) {}
+    rpc UnpinPost(PostOwnerRequest) returns (PostResponse) {}
+    rpc ArchivePost(PostOwnerRequest) returns (PostResponse) {}
+    rpc RestoreArchivedPost(PostOwnerRequest) returns (PostResponse) {}
 
-    // Media Operations
+    // Media operations
     rpc AddPostMedia(PostMediaRequest) returns (PostResponse) {}
     rpc DeletePostMedia(MediaIdRequest) returns (GenericResponse) {}
 
-    // Like Operations
+    // Post like operations
     rpc LikePost(LikeRequest) returns (PostResponse) {}
     rpc UnlikePost(LikeRequest) returns (PostResponse) {}
+    rpc GetPostLikes(GetPostLikesRequest) returns (PostLikeListResponse) {}
+    rpc CheckLikeStatus(CheckLikeStatusRequest) returns (CheckLikeStatusResponse) {}
 
-    // Comment Operations
+    // Comment operations
     rpc CreateComment(CommentCreateRequest) returns (CommentResponse) {}
     rpc UpdateComment(CommentUpdateRequest) returns (CommentResponse) {}
     rpc DeleteComment(CommentRequest) returns (GenericResponse) {}
     rpc GetComments(GetCommentsRequest) returns (CommentListResponse) {}
+    rpc GetComment(CommentRequest) returns (CommentResponse) {}
+    rpc ReplyComment(CommentCreateRequest) returns (CommentResponse) {}
+    rpc GetReplies(GetRepliesRequest) returns (CommentListResponse) {}
     rpc LikeComment(CommentLikeRequest) returns (CommentResponse) {}
     rpc UnlikeComment(CommentLikeRequest) returns (CommentResponse) {}
-} 
+    rpc ReportComment(ReportCommentRequest) returns (ReportResponse) {}
+
+    // Share operations
+    rpc SharePost(SharePostRequest) returns (PostShareResponse) {}
+    rpc GetSharedPosts(GetSharedPostsRequest) returns (PostShareListResponse) {}
+    rpc DeleteSharedPost(DeleteSharedPostRequest) returns (GenericResponse) {}
+
+    // Report operations
+    rpc ReportPost(ReportPostRequest) returns (ReportResponse) {}
+    rpc ReportProperty(ReportPropertyRequest) returns (ReportResponse) {}
+    rpc ReportUser(ReportUserRequest) returns (ReportResponse) {}
+    rpc GetMyReports(GetMyReportsRequest) returns (ReportListResponse) {}
+}
