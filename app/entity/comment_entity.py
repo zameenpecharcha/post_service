@@ -1,30 +1,38 @@
-from sqlalchemy import Column, BigInteger, String, TIMESTAMP, ForeignKey, Boolean
-from sqlalchemy.orm import relationship, backref
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import backref, relationship
+from uuid import uuid4
+
 from ..utils.db_connection import Base
-from datetime import datetime
+from ..utils.schema_helpers import POST_SCHEMA, utcnow
+
+POSTS_TABLE = f"{POST_SCHEMA}.posts"
+COMMENTS_TABLE = f"{POST_SCHEMA}.comments"
+
 
 class Comment(Base):
     __tablename__ = "comments"
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = {"schema": POST_SCHEMA}
 
-    id = Column(BigInteger, primary_key=True)
-    post_id = Column(BigInteger, ForeignKey('posts.id', ondelete='CASCADE'), nullable=False)
-    parent_comment_id = Column(BigInteger, ForeignKey('comments.id', ondelete='CASCADE'), nullable=True)  # NULL for top-level comments
-    comment = Column(String(1000))
-    user_id = Column(BigInteger, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    status = Column(String(50), default='active')
-    is_anonymous = Column(Boolean, default=False)
-    added_at = Column(TIMESTAMP, default=datetime.utcnow)
-    edited_at = Column(TIMESTAMP, default=datetime.utcnow)
-    commented_at = Column(TIMESTAMP, default=datetime.utcnow)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    post_id = Column(UUID(as_uuid=True), ForeignKey(f"{POSTS_TABLE}.id", ondelete="CASCADE"), nullable=False)
+    parent_comment_id = Column(UUID(as_uuid=True), ForeignKey(f"{COMMENTS_TABLE}.id", ondelete="CASCADE"))
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    content = Column(Text)
+    is_anonymous = Column(Boolean, nullable=False, default=False)
+    like_count = Column(Integer, nullable=False, default=0)
+    reply_count = Column(Integer, nullable=False, default=0)
+    report_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(30), nullable=False, default="ACTIVE")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at = Column(DateTime(timezone=True))
 
-    # Relationships
-    user = relationship("User", back_populates="comments")
     post = relationship("Post", foreign_keys=[post_id], back_populates="comments")
     parent = relationship(
         "Comment",
         remote_side=[id],
         backref=backref("replies", cascade="all, delete-orphan"),
-        foreign_keys=[parent_comment_id]
+        foreign_keys=[parent_comment_id],
     )
-    likes = relationship("CommentLike", back_populates="comment", cascade="all, delete-orphan") 
+    likes = relationship("CommentLike", back_populates="comment", cascade="all, delete-orphan")

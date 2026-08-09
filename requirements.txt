@@ -1,12 +1,13 @@
 SQLAlchemy
 python-dotenv
 psycopg2-binary
-grpcio
-protobuf
-grpcio-tools
+grpcio>=1.83.0
+protobuf>=7.35.1
+grpcio-tools>=1.83.0
 pydantic
 boto3
 botocore 
+certifi
 bcrypt
 PyJWT[crypto]
 cryptography

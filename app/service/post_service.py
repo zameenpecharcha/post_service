@@ -1,59 +1,81 @@
 import grpc
 import os
 from concurrent import futures
+from contextlib import contextmanager
 from dotenv import load_dotenv
+
 from ..proto_files import post_pb2, post_pb2_grpc
 from ..repository.post_repository import PostRepository
 from ..utils.db_connection import get_db_engine
-from sqlalchemy.orm import sessionmaker
-from ..entity.user_entity import User
+from ..utils.schema_helpers import parse_uuid, uuid_str
+from ..utils.s3_utils import build_post_key, upload_file_to_s3
 from ..interceptors.auth_interceptor import AuthServerInterceptor
-from ..utils.s3_utils import upload_base64_to_s3, upload_file_to_s3, build_post_key
+from sqlalchemy.orm import sessionmaker
 
-from uuid import uuid4
-# Load environment variables
 load_dotenv()
-
-# Create database session factory
 SessionLocal = sessionmaker(bind=get_db_engine(), expire_on_commit=False)
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 class PostsService(post_pb2_grpc.PostsServiceServicer):
     def __init__(self):
         self._SessionLocal = SessionLocal
-        self._open_session()
 
-    def _open_session(self):
-        self.db = self._SessionLocal()
-        self.repository = PostRepository(self.db)
-
-    def _reset_session(self):
-        """Recover from Neon SSL drops / poisoned transactions."""
+    @contextmanager
+    def _session(self):
+        db = self._SessionLocal()
         try:
-            self.db.rollback()
+            yield db, PostRepository(db)
         except Exception:
-            pass
-        try:
-            self.db.close()
-        except Exception:
-            pass
-        self._open_session()
-
-    def _with_db(self, fn):
-        try:
-            return fn()
-        except Exception:
-            self._reset_session()
+            db.rollback()
             raise
+        finally:
+            db.close()
 
     def _convert_timestamp(self, dt):
         return int(dt.timestamp()) if dt else 0
+
+    def _convert_to_proto_media(self, media, post_id=None):
+        def _get(field):
+            if hasattr(media, field):
+                return getattr(media, field)
+            mapping = getattr(media, "_mapping", None)
+            if mapping and field in mapping:
+                return mapping[field]
+            return None
+
+        return post_pb2.PostMedia(
+            id=uuid_str(_get("id")),
+            post_id=uuid_str(post_id or _get("entity_id")),
+            media_type=_get("media_type") or "",
+            media_url=_get("file_url") or "",
+            media_order=int(_get("display_order") or 0),
+            media_size=int(_get("file_size") or 0),
+            caption="",
+            uploaded_at=self._convert_timestamp(_get("created_at")),
+        )
+
+    def _convert_to_proto_comment(self, comment, repository=None):
+        like_count = comment.like_count
+        if like_count is None and repository:
+            like_count = repository.get_comment_like_count(comment.id)
+
+        return post_pb2.Comment(
+            id=uuid_str(comment.id),
+            post_id=uuid_str(comment.post_id),
+            parent_comment_id=uuid_str(comment.parent_comment_id),
+            comment=comment.content or "",
+            user_id=uuid_str(comment.user_id),
+            user_first_name="",
+            user_last_name="",
+            user_role="",
+            status=comment.status or "ACTIVE",
+            added_at=self._convert_timestamp(comment.created_at),
+            commented_at=self._convert_timestamp(comment.created_at),
+            replies=[self._convert_to_proto_comment(r, repository) for r in (comment.replies or [])],
+            like_count=int(like_count or 0),
+            is_anonymous=bool(comment.is_anonymous),
+            edited_at=self._convert_timestamp(comment.updated_at),
+        )
 
     def _convert_to_proto_post(
         self,
@@ -69,935 +91,884 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
         if not post:
             return None
 
-        repo = repository or self.repository
-        # Prefer pre-batched media/counts (Search/Trending) to avoid N+1 queries.
-        if media_rows is None:
-            if include_media:
-                try:
-                    media_rows = repo.get_post_media(post.id)
-                except Exception:
-                    media_rows = []
-            else:
+        repo = repository
+        if media_rows is None and include_media and repo:
+            try:
+                media_rows = repo.get_post_media(post.id)
+            except Exception:
                 media_rows = []
+        elif media_rows is None:
+            media_rows = []
 
         liked_ids = liked_post_ids or set()
         comments = []
-        if include_comments:
+        if include_comments and getattr(post, "comments", None):
             try:
-                comments = [self._convert_to_proto_comment(c) for c in (post.comments or [])]
+                comments = [self._convert_to_proto_comment(c, repo) for c in post.comments]
             except Exception:
                 comments = []
 
-        if comment_count is None:
-            try:
-                comment_count = repo.get_post_comment_count(post.id)
-            except Exception:
-                try:
-                    comment_count = len(post.comments) if getattr(post, 'comments', None) is not None else 0
-                except Exception:
-                    comment_count = 0
-
-        if like_count is None:
-            try:
-                like_count = repo.get_post_like_count(post.id)
-            except Exception:
-                try:
-                    like_count = len(post.likes) if getattr(post, 'likes', None) is not None else 0
-                except Exception:
-                    like_count = 0
-
         return post_pb2.Post(
-            id=post.id,
-            user_id=post.user_id,
-            user_first_name=post.user.first_name if post.user else "",
-            user_last_name=post.user.last_name if post.user else "",
-            user_email=post.user.email if post.user else "",
-            user_phone=post.user.phone if post.user else "",
-            user_role=post.user.role if post.user else "",
+            id=uuid_str(post.id),
+            user_id=uuid_str(post.user_id),
+            user_first_name="",
+            user_last_name="",
+            user_email="",
+            user_phone="",
+            user_role="",
             title=post.title or "",
             content=post.content or "",
-            visibility=post.visibility or "",
-            type=post.type or "",
+            visibility=post.visibility or "PUBLIC",
+            type=post.post_type or "TEXT",
             location=post.location or "",
-            # Include new lat/lng
-            latitude=float(post.latitude) if getattr(post, 'latitude', None) is not None else 0.0,
-            longitude=float(post.longitude) if getattr(post, 'longitude', None) is not None else 0.0,
+            latitude=float(post.latitude) if post.latitude is not None else 0.0,
+            longitude=float(post.longitude) if post.longitude is not None else 0.0,
             price=float(post.price) if post.price else 0.0,
-            status=post.status or "",
+            status=post.status or "DRAFT",
             created_at=self._convert_timestamp(post.created_at),
             media=[self._convert_to_proto_media(m, post_id=post.id) for m in (media_rows or [])],
             comments=comments,
-            like_count=int(like_count or 0),
-            comment_count=int(comment_count or 0),
+            like_count=int(like_count if like_count is not None else (post.like_count or 0)),
+            comment_count=int(comment_count if comment_count is not None else (post.comment_count or 0)),
+            is_anonymous=bool(post.is_anonymous),
             is_liked=post.id in liked_ids,
-        )
-
-    def _convert_to_proto_media(self, media, post_id: int = 0):
-        # Support SQLAlchemy ORM objects and Core Row objects
-        def _get(field):
-            if hasattr(media, field):
-                return getattr(media, field)
-            mapping = getattr(media, "_mapping", None)
-            if mapping and field in mapping:
-                return mapping[field]
-            return None
-
-        return post_pb2.PostMedia(
-            id=_get('id') or 0,
-            post_id=post_id or _get('post_id') or 0,
-            media_type=_get('media_type') or "",
-            media_url=_get('media_url') or "",
-            media_order=_get('media_order') or 0,
-            media_size=_get('media_size') or 0,
-            caption=_get('caption') or "",
-            uploaded_at=self._convert_timestamp(_get('uploaded_at'))
-        )
-
-    def _convert_to_proto_comment(self, comment):
-        return post_pb2.Comment(
-            id=comment.id,
-            post_id=comment.post_id,
-            parent_comment_id=comment.parent_comment_id or 0,
-            comment=comment.comment,
-            user_id=comment.user_id,
-            user_first_name=comment.user.first_name if comment.user else "",
-            user_last_name=comment.user.last_name if comment.user else "",
-            user_role=comment.user.role if comment.user else "",
-            status=comment.status,
-            added_at=self._convert_timestamp(comment.added_at),
-            commented_at=self._convert_timestamp(comment.commented_at),
-            replies=[self._convert_to_proto_comment(r) for r in comment.replies],
-            like_count=len(comment.likes) if comment.likes is not None else 0,
-            is_anonymous=bool(getattr(comment, 'is_anonymous', False)),
-            edited_at=self._convert_timestamp(getattr(comment, 'edited_at', None)),
+            post_code=post.post_code or "",
+            property_id=uuid_str(post.property_id),
+            currency=post.currency or "INR",
+            is_pinned=bool(post.is_pinned),
+            pinned_at=self._convert_timestamp(post.pinned_at),
+            share_count=int(post.share_count or 0),
+            view_count=int(post.view_count or 0),
         )
 
     def CreatePost(self, request, context):
-        try:
-            # First check if user exists
-            user = self.db.query(User).filter(User.id == request.user_id).first()
-            if not user:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"User with id {request.user_id} not found"
-                )
+        user_id = parse_uuid(request.user_id)
+        if not user_id:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details("user_id is required")
+            return post_pb2.PostResponse(success=False, message="user_id is required")
 
+        with self._session() as (db, repo):
             try:
-                # Begin explicit transaction
-                post = self.repository.create_post(
-                    user_id=request.user_id,
+                post = repo.create_post(
+                    user_id=user_id,
                     title=request.title,
                     content=request.content,
                     visibility=request.visibility,
-                    type=request.type,
+                    post_type=request.type,
                     location=request.location,
-                    latitude=getattr(request, 'latitude', None),
-                    longitude=getattr(request, 'longitude', None),
-                    price=request.price,
+                    latitude=getattr(request, "latitude", None) or None,
+                    longitude=getattr(request, "longitude", None) or None,
+                    price=request.price or None,
                     status=request.status,
-                    is_anonymous=getattr(request, 'is_anonymous', False),
+                    is_anonymous=getattr(request, "is_anonymous", False),
+                    property_id=parse_uuid(getattr(request, "property_id", None)),
+                    currency=getattr(request, "currency", None) or "INR",
                     commit=False,
                 )
 
-                created_media_ids = []
-                # Handle media uploads if any
                 for media in request.media:
-                    # Require file_path for uploads (supports images and videos)
-                    file_path = getattr(media, 'file_path', None)
-                    content_type = getattr(media, 'content_type', None)
-                    file_name = getattr(media, 'file_name', None)
+                    file_path = getattr(media, "file_path", None)
+                    content_type = getattr(media, "content_type", None)
+                    file_name = getattr(media, "file_name", None)
                     if not file_path:
                         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                        context.set_details("file_path is required for media upload")
-                        self.db.rollback()
+                        db.rollback()
                         return post_pb2.PostResponse(success=False, message="file_path is required for media upload")
 
-                    # 1) Create media row first to obtain media_id (no commit yet)
-                    temp_url = ""
-                    inferred_type = media.media_type or (('video' if (content_type or '').startswith('video/') else 'image'))
-                    media_id = self.repository.add_post_media(
+                    inferred_type = media.media_type or (
+                        "video" if (content_type or "").startswith("video/") else "image"
+                    )
+                    media_id = repo.add_post_media(
                         post_id=post.id,
+                        uploaded_by=user_id,
                         media_type=inferred_type,
-                        media_url=temp_url,
-                        media_order=media.media_order,
-                        media_size=0,
-                        caption=media.caption,
+                        file_url="",
+                        display_order=media.media_order or 1,
+                        file_name=file_name,
+                        mime_type=content_type,
                         commit=False,
                     )
-                    created_media_ids.append(media_id)
-
-                    # 2) Build S3 key and upload
-                    fn = file_name or (file_path.split('/')[-1] if file_path else None)
+                    fn = file_name or (file_path.split("/")[-1] if file_path else None)
                     key = build_post_key(post.id, media_id, fn, content_type)
                     public_url, size_bytes = upload_file_to_s3(
                         file_path=file_path,
                         key=key,
                         content_type=content_type,
                     )
+                    repo.update_media_url_size(media_id, public_url, size_bytes, commit=False)
 
-                    # 3) Update media row (no commit yet)
-                    self.repository.update_media_url_size(media_id, public_url, size_bytes, commit=False)
-
-                # All operations succeeded; commit once
-                self.db.commit()
-
-                # Refresh post and return
-                post = self.repository.get_post(post.id)
+                db.commit()
+                post = repo.get_post(post.id)
                 return post_pb2.PostResponse(
                     success=True,
                     message="Post created successfully",
-                    post=self._convert_to_proto_post(post)
+                    post=self._convert_to_proto_post(post, repository=repo),
                 )
             except Exception as e:
-                # Rollback if any step failed
-                self.db.rollback()
+                db.rollback()
                 context.set_code(grpc.StatusCode.INTERNAL)
                 context.set_details(str(e))
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"Failed to create post: {str(e)}"
-                )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostResponse(
-                success=False,
-                message=f"Failed to create post: {str(e)}"
-            )
+                return post_pb2.PostResponse(success=False, message=f"Failed to create post: {e}")
 
     def GetPost(self, request, context):
-        try:
-            post = self.repository.get_post(request.post_id)
-            if not post:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Post not found")
-                return post_pb2.PostResponse(
-                    success=False,
-                    message="Post not found"
-                )
+        post_id = parse_uuid(request.post_id)
+        if not post_id:
+            return post_pb2.PostResponse(success=False, message="post_id is required")
 
-            return post_pb2.PostResponse(
-                success=True,
-                message="Post retrieved successfully",
-                post=self._convert_to_proto_post(post)
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostResponse(
-                success=False,
-                message=f"Failed to get post: {str(e)}"
-            )
+        with self._session() as (_, repo):
+            try:
+                post = repo.get_post(post_id)
+                if not post:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.PostResponse(success=False, message="Post not found")
+                return post_pb2.PostResponse(
+                    success=True,
+                    message="Post retrieved successfully",
+                    post=self._convert_to_proto_post(post, repository=repo),
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostResponse(success=False, message=f"Failed to get post: {e}")
 
     def UpdatePost(self, request, context):
-        try:
-            # Proto3 scalar defaults ("" / 0 / False) are indistinguishable from
-            # "unset" unless we only apply fields that were explicitly set.
-            kwargs = {}
-            for field, value in request.ListFields():
-                name = field.name
-                if name == "post_id":
-                    continue
+        post_id = parse_uuid(request.post_id)
+        if not post_id:
+            return post_pb2.PostResponse(success=False, message="post_id is required")
+
+        kwargs = {}
+        for field, value in request.ListFields():
+            name = field.name
+            if name == "post_id":
+                continue
+            if name == "type":
+                kwargs["post_type"] = value
+            elif name == "property_id":
+                kwargs["property_id"] = parse_uuid(value)
+            else:
                 kwargs[name] = value
 
-            if not kwargs:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("No fields to update")
-                return post_pb2.PostResponse(
-                    success=False,
-                    message="No fields to update",
-                )
+        if not kwargs:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            return post_pb2.PostResponse(success=False, message="No fields to update")
 
-            post = self.repository.update_post(post_id=request.post_id, **kwargs)
-            if not post:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Post not found")
+        with self._session() as (_, repo):
+            try:
+                post = repo.update_post(post_id=post_id, **kwargs)
+                if not post:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.PostResponse(success=False, message="Post not found")
                 return post_pb2.PostResponse(
-                    success=False,
-                    message="Post not found"
+                    success=True,
+                    message="Post updated successfully",
+                    post=self._convert_to_proto_post(post, include_comments=False, repository=repo),
                 )
-
-            return post_pb2.PostResponse(
-                success=True,
-                message="Post updated successfully",
-                post=self._convert_to_proto_post(post, include_comments=False)
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostResponse(
-                success=False,
-                message=f"Failed to update post: {str(e)}"
-            )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostResponse(success=False, message=f"Failed to update post: {e}")
 
     def DeletePost(self, request, context):
-        try:
-            success = self.repository.delete_post(request.post_id)
-            if not success:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Post not found")
-                return post_pb2.GenericResponse(
-                    success=False,
-                    message="Post not found"
-                )
+        post_id = parse_uuid(request.post_id)
+        if not post_id:
+            return post_pb2.GenericResponse(success=False, message="post_id is required")
 
-            return post_pb2.GenericResponse(
-                success=True,
-                message="Post deleted successfully"
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.GenericResponse(
-                success=False,
-                message=f"Failed to delete post: {str(e)}"
-            )
+        with self._session() as (_, repo):
+            try:
+                success = repo.delete_post(post_id)
+                if not success:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.GenericResponse(success=False, message="Post not found")
+                return post_pb2.GenericResponse(success=True, message="Post deleted successfully")
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.GenericResponse(success=False, message=f"Failed to delete post: {e}")
+
+    def _list_posts_response(self, posts, total, page, limit, viewer_user_id, repo):
+        liked_ids = set()
+        viewer_id = parse_uuid(viewer_user_id)
+        post_ids = [p.id for p in posts]
+        if viewer_id and post_ids:
+            try:
+                liked_ids = repo.get_liked_post_ids(viewer_id, post_ids)
+            except Exception:
+                liked_ids = set()
+
+        media_map = repo.get_posts_media_map(post_ids) if post_ids else {}
+        like_map = repo.get_posts_like_counts(post_ids) if post_ids else {}
+        comment_map = repo.get_posts_comment_counts(post_ids) if post_ids else {}
+        total_pages = max(1, (total + limit - 1) // limit) if limit else 1
+
+        return post_pb2.PostListResponse(
+            success=True,
+            message="Posts retrieved successfully",
+            posts=[
+                self._convert_to_proto_post(
+                    p,
+                    liked_ids,
+                    include_comments=False,
+                    repository=repo,
+                    media_rows=media_map.get(p.id, []),
+                    like_count=like_map.get(p.id, p.like_count),
+                    comment_count=comment_map.get(p.id, p.comment_count),
+                )
+                for p in posts
+            ],
+            total_count=total,
+            page=page,
+            total_pages=total_pages,
+        )
 
     def GetPostsByUser(self, request, context):
-        try:
-            posts, total = self.repository.get_posts_by_user(
-                user_id=request.user_id,
-                page=request.page,
-                limit=request.limit
-            )
+        user_id = parse_uuid(request.user_id)
+        if not user_id:
+            return post_pb2.PostListResponse(success=False, message="user_id is required")
 
-            viewer_id = getattr(request, "viewer_user_id", 0) or 0
-            liked_ids = set()
-            if viewer_id:
-                try:
-                    liked_ids = self.repository.get_liked_post_ids(
-                        viewer_id, [p.id for p in posts]
-                    )
-                except Exception:
-                    liked_ids = set()
-
-            post_ids = [p.id for p in posts]
-            media_map = {}
-            like_map = {}
-            comment_map = {}
+        with self._session() as (_, repo):
             try:
-                media_map = self.repository.get_posts_media_map(post_ids)
-                like_map = self.repository.get_posts_like_counts(post_ids)
-                comment_map = self.repository.get_posts_comment_counts(post_ids)
-            except Exception:
-                pass
-
-            return post_pb2.PostListResponse(
-                success=True,
-                message="Posts retrieved successfully",
-                posts=[
-                    self._convert_to_proto_post(
-                        p,
-                        liked_ids,
-                        include_comments=False,
-                        media_rows=media_map.get(p.id, []),
-                        like_count=like_map.get(p.id, 0),
-                        comment_count=comment_map.get(p.id, 0),
-                    )
-                    for p in posts
-                ],
-                total_count=total,
-                page=request.page,
-                total_pages=(total + request.limit - 1) // request.limit
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostListResponse(
-                success=False,
-                message=f"Failed to get posts: {str(e)}"
-            )
+                posts, total = repo.get_posts_by_user(user_id, request.page, request.limit)
+                return self._list_posts_response(
+                    posts, total, request.page, request.limit, request.viewer_user_id, repo
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=f"Failed to get posts: {e}")
 
     def SearchPosts(self, request, context):
-        # Per-request session: Home fires search + trending in parallel; a shared
-        # SQLAlchemy session is not thread-safe and causes intermittent INTERNAL errors.
-        db = self._SessionLocal()
-        repo = PostRepository(db)
-        try:
-            page = max(1, request.page)
-            limit = max(1, min(100, request.limit))
-
-            def _do():
-                return repo.search_posts(
+        page = max(1, request.page)
+        limit = max(1, min(100, request.limit))
+        with self._session() as (_, repo):
+            try:
+                posts, total = repo.search_posts(
                     type=request.type,
                     location=request.location,
                     min_price=request.min_price,
                     max_price=request.max_price,
                     status=request.status,
+                    query=getattr(request, "query", None),
+                    hashtag=getattr(request, "hashtag", None),
                     page=page,
-                    limit=limit
+                    limit=limit,
                 )
-
-            try:
-                posts, total = _do()
-            except Exception:
-                db.rollback()
-                posts, total = _do()
-
-            viewer_id = getattr(request, "viewer_user_id", 0) or 0
-            liked_ids = set()
-            if viewer_id:
-                try:
-                    liked_ids = repo.get_liked_post_ids(viewer_id, [p.id for p in posts])
-                except Exception:
-                    liked_ids = set()
-
-            total_pages = (total + limit - 1) // limit
-            if total_pages == 0:
-                total_pages = 1
-
-            post_ids = [p.id for p in posts]
-            media_map = {}
-            like_map = {}
-            comment_map = {}
-            try:
-                media_map = repo.get_posts_media_map(post_ids)
-                like_map = repo.get_posts_like_counts(post_ids)
-                comment_map = repo.get_posts_comment_counts(post_ids)
-            except Exception:
-                pass
-
-            return post_pb2.PostListResponse(
-                success=True,
-                message="Posts retrieved successfully",
-                posts=[
-                    self._convert_to_proto_post(
-                        p,
-                        liked_ids,
-                        include_comments=False,
-                        repository=repo,
-                        media_rows=media_map.get(p.id, []),
-                        like_count=like_map.get(p.id, 0),
-                        comment_count=comment_map.get(p.id, 0),
-                    )
-                    for p in posts
-                ],
-                total_count=total,
-                page=page,
-                total_pages=total_pages
-            )
-        except Exception as e:
-            try:
-                db.rollback()
-            except Exception:
-                pass
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostListResponse(
-                success=False,
-                message=f"Failed to search posts: {str(e)}"
-            )
-        finally:
-            db.close()
+                return self._list_posts_response(
+                    posts, total, page, limit, request.viewer_user_id, repo
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=f"Failed to search posts: {e}")
 
     def TrendingPosts(self, request, context):
-        db = self._SessionLocal()
-        repo = PostRepository(db)
-        try:
-            limit = max(1, min(50, request.limit or 10))
-
-            def _do():
-                return repo.get_trending_posts(limit=limit)
-
+        limit = max(1, min(50, request.limit or 10))
+        with self._session() as (_, repo):
             try:
-                posts = _do()
-            except Exception:
-                db.rollback()
-                posts = _do()
-
-            viewer_id = getattr(request, "viewer_user_id", 0) or 0
-            liked_ids = set()
-            if viewer_id:
-                try:
-                    liked_ids = repo.get_liked_post_ids(viewer_id, [p.id for p in posts])
-                except Exception:
-                    liked_ids = set()
-
-            post_ids = [p.id for p in posts]
-            like_map = {}
-            comment_map = {}
-            try:
-                like_map = repo.get_posts_like_counts(post_ids)
-                comment_map = repo.get_posts_comment_counts(post_ids)
-            except Exception:
-                pass
-
-            return post_pb2.PostListResponse(
-                success=True,
-                message="Trending posts retrieved successfully",
-                posts=[
-                    self._convert_to_proto_post(
-                        p,
-                        liked_ids,
-                        include_comments=False,
-                        repository=repo,
-                        include_media=False,
-                        media_rows=[],
-                        like_count=like_map.get(p.id, 0),
-                        comment_count=comment_map.get(p.id, 0),
-                    )
-                    for p in posts
-                ],
-                total_count=len(posts),
-                page=1,
-                total_pages=1,
-            )
-        except Exception as e:
-            try:
-                db.rollback()
-            except Exception:
-                pass
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostListResponse(
-                success=False,
-                message=f"Failed to get trending posts: {str(e)}"
-            )
-        finally:
-            db.close()
+                posts = repo.get_trending_posts(limit=limit)
+                return self._list_posts_response(posts, len(posts), 1, limit, request.viewer_user_id, repo)
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=f"Failed to get trending posts: {e}")
 
     def AddPostMedia(self, request, context):
-        try:
-            post = self.repository.get_post(request.post_id)
-            if not post:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Post not found")
-                return post_pb2.PostResponse(
-                    success=False,
-                    message="Post not found"
-                )
+        post_id = parse_uuid(request.post_id)
+        uploaded_by = parse_uuid(getattr(request, "uploaded_by", None))
+        if not post_id:
+            return post_pb2.PostResponse(success=False, message="post_id is required")
 
-            for media in request.media:
-                try:
-                    # 1) Create media row first to obtain media_id
-                    temp_url = ""
-                    media_id = self.repository.add_post_media(
-                        post_id=post.id,
-                        media_type=media.media_type or 'image',
-                        media_url=temp_url,
-                        media_order=media.media_order,
-                        media_size=0,
-                        caption=media.caption,
-                    )
+        with self._session() as (_, repo):
+            try:
+                post = repo.get_post(post_id)
+                if not post:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.PostResponse(success=False, message="Post not found")
 
-                    # 2) Build S3 key using media_id and upload
-                    file_path = getattr(media, 'file_path', None)
-                    content_type = getattr(media, 'content_type', None)
+                uploader = uploaded_by or post.user_id
+                for media in request.media:
+                    file_path = getattr(media, "file_path", None)
+                    content_type = getattr(media, "content_type", None)
                     if not file_path:
                         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                        context.set_details("file_path is required for media upload")
                         return post_pb2.PostResponse(success=False, message="file_path is required for media upload")
 
-                    file_name = getattr(media, 'file_name', None) or (file_path.split('/')[-1] if file_path else 'image')
+                    media_id = repo.add_post_media(
+                        post_id=post.id,
+                        uploaded_by=uploader,
+                        media_type=media.media_type or "image",
+                        file_url="",
+                        display_order=media.media_order or 1,
+                        file_name=getattr(media, "file_name", None),
+                        mime_type=content_type,
+                    )
+                    file_name = getattr(media, "file_name", None) or file_path.split("/")[-1]
                     key = build_post_key(post.id, media_id, file_name, content_type)
                     public_url, size_bytes = upload_file_to_s3(
                         file_path=file_path,
                         key=key,
                         content_type=content_type,
                     )
+                    repo.update_media_url_size(media_id, public_url, size_bytes)
 
-                    # 3) Update media row
-                    self.repository.update_media_url_size(media_id, public_url, size_bytes)
-                except Exception as media_error:
-                    print(f"Error adding media: {str(media_error)}")
-                    continue
-
-            # Refresh post to get updated media
-            post = self.repository.get_post(request.post_id)
-            return post_pb2.PostResponse(
-                success=True,
-                message="Media added successfully",
-                post=self._convert_to_proto_post(post)
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostResponse(
-                success=False,
-                message=f"Failed to add media: {str(e)}"
-            )
+                post = repo.get_post(post_id)
+                return post_pb2.PostResponse(
+                    success=True,
+                    message="Media added successfully",
+                    post=self._convert_to_proto_post(post, repository=repo),
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostResponse(success=False, message=f"Failed to add media: {e}")
 
     def DeletePostMedia(self, request, context):
-        try:
-            success = self.repository.delete_post_media(request.media_id)
-            if not success:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Media not found")
-                return post_pb2.GenericResponse(
-                    success=False,
-                    message="Media not found"
-                )
+        media_id = parse_uuid(request.media_id)
+        if not media_id:
+            return post_pb2.GenericResponse(success=False, message="media_id is required")
 
-            return post_pb2.GenericResponse(
-                success=True,
-                message="Media deleted successfully"
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.GenericResponse(
-                success=False,
-                message=f"Failed to delete media: {str(e)}"
-            )
+        with self._session() as (_, repo):
+            try:
+                success = repo.delete_post_media(media_id)
+                if not success:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.GenericResponse(success=False, message="Media not found")
+                return post_pb2.GenericResponse(success=True, message="Media deleted successfully")
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.GenericResponse(success=False, message=f"Failed to delete media: {e}")
 
     def LikePost(self, request, context):
-        try:
-            # First check if user exists
-            user = self.db.query(User).filter(User.id == request.user_id).first()
-            if not user:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"User with id {request.user_id} not found"
-                )
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.PostResponse(success=False, message="post_id and user_id are required")
 
-            # Check if post exists and get it first
-            post = self.repository.get_post(request.post_id)  # Changed from request.id
-            if not post:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"Post with id {request.post_id} not found")  # Changed from request.id
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"Post with id {request.post_id} not found"  # Changed from request.id
-                )
-
-            # Try to like the post
+        with self._session() as (_, repo):
             try:
-                # Use the post ID from the post we found
-                post = self.repository.like_post(
-                    post_id=post.id,
-                    user_id=request.user_id,
-                    reaction_type=request.reaction_type
-                )
+                post = repo.like_post(post_id, user_id, request.reaction_type)
                 return post_pb2.PostResponse(
                     success=True,
                     message="Post liked successfully",
-                    post=self._convert_to_proto_post(post)
+                    post=self._convert_to_proto_post(post, repository=repo),
                 )
             except Exception as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(str(e))
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"Failed to like post: {str(e)}"
-                )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostResponse(
-                success=False,
-                message=f"Failed to like post: {str(e)}"
-            )
+                return post_pb2.PostResponse(success=False, message=f"Failed to like post: {e}")
 
     def UnlikePost(self, request, context):
-        try:
-            # First check if user exists
-            user = self.db.query(User).filter(User.id == request.user_id).first()
-            if not user:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"User with id {request.user_id} not found"
-                )
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.PostResponse(success=False, message="post_id and user_id are required")
 
-            # Check if post exists and get it first
-            post = self.repository.get_post(request.post_id)  # Changed from request.id
-            if not post:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"Post with id {request.post_id} not found")  # Changed from request.id
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"Post with id {request.post_id} not found"  # Changed from request.id
-                )
-
-            # Try to unlike the post
+        with self._session() as (_, repo):
             try:
-                post = self.repository.unlike_post(
-                    post_id=post.id,
-                    user_id=request.user_id
-                )
+                post = repo.unlike_post(post_id, user_id)
                 return post_pb2.PostResponse(
                     success=True,
                     message="Post unliked successfully",
-                    post=self._convert_to_proto_post(post)
+                    post=self._convert_to_proto_post(post, repository=repo),
                 )
             except Exception as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(str(e))
-                return post_pb2.PostResponse(
-                    success=False,
-                    message=f"Failed to unlike post: {str(e)}"
-                )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.PostResponse(
-                success=False,
-                message=f"Failed to unlike post: {str(e)}"
-            )
+                return post_pb2.PostResponse(success=False, message=f"Failed to unlike post: {e}")
 
     def CreateComment(self, request, context):
-        try:
-            # First check if user exists
-            user = self.db.query(User).filter(User.id == request.user_id).first()
-            if not user:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.CommentResponse(success=False, message=f"User with id {request.user_id} not found")
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.CommentResponse(success=False, message="post_id and user_id are required")
 
-            # Check if post exists
-            post = self.repository.get_post(request.post_id)
-            if not post:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"Post with id {request.post_id} not found")
-                return post_pb2.CommentResponse(success=False, message=f"Post with id {request.post_id} not found")
-
+        with self._session() as (_, repo):
             try:
-                # If parent_comment_id is 0, treat as None for top-level comment
-                parent_comment_id = request.parent_comment_id if request.parent_comment_id > 0 else None
-
-                comment = self.repository.create_comment(
-                    post_id=request.post_id,
-                    user_id=request.user_id,
-                    comment_text=request.comment,
-                    parent_comment_id=parent_comment_id
+                comment = repo.create_comment(
+                    post_id=post_id,
+                    user_id=user_id,
+                    content=request.comment,
+                    parent_comment_id=parse_uuid(request.parent_comment_id),
+                    is_anonymous=getattr(request, "is_anonymous", False),
                 )
                 return post_pb2.CommentResponse(
                     success=True,
                     message="Comment created successfully",
-                    comment=self._convert_to_proto_comment(comment),
+                    comment=self._convert_to_proto_comment(comment, repo),
                 )
             except Exception as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(str(e))
                 return post_pb2.CommentResponse(success=False, message=str(e))
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.CommentResponse(success=False, message=str(e))
 
     def UpdateComment(self, request, context):
-        try:
-            comment = self.repository.update_comment(
-                comment_id=request.comment_id,
-                comment_text=request.comment,
-                status=request.status
-            )
-            if not comment:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Comment not found")
-                return post_pb2.CommentResponse(success=False, message="Comment not found")
+        comment_id = parse_uuid(request.comment_id)
+        if not comment_id:
+            return post_pb2.CommentResponse(success=False, message="comment_id is required")
 
-            return post_pb2.CommentResponse(
-                success=True,
-                message="Comment updated successfully",
-                comment=self._convert_to_proto_comment(comment),
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.CommentResponse(success=False, message=str(e))
+        with self._session() as (_, repo):
+            try:
+                comment = repo.update_comment(
+                    comment_id=comment_id,
+                    content=request.comment or None,
+                    status=request.status or None,
+                )
+                if not comment:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.CommentResponse(success=False, message="Comment not found")
+                return post_pb2.CommentResponse(
+                    success=True,
+                    message="Comment updated successfully",
+                    comment=self._convert_to_proto_comment(comment, repo),
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.CommentResponse(success=False, message=str(e))
 
     def DeleteComment(self, request, context):
-        try:
-            success = self.repository.delete_comment(request.comment_id)
-            if not success:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Comment not found")
-                return post_pb2.GenericResponse(
-                    success=False,
-                    message="Comment not found"
-                )
+        comment_id = parse_uuid(request.comment_id)
+        if not comment_id:
+            return post_pb2.GenericResponse(success=False, message="comment_id is required")
 
-            return post_pb2.GenericResponse(
-                success=True,
-                message="Comment deleted successfully"
-            )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.GenericResponse(
-                success=False,
-                message=f"Failed to delete comment: {str(e)}"
-            )
+        with self._session() as (_, repo):
+            try:
+                success = repo.delete_comment(comment_id)
+                if not success:
+                    context.set_code(grpc.StatusCode.NOT_FOUND)
+                    return post_pb2.GenericResponse(success=False, message="Comment not found")
+                return post_pb2.GenericResponse(success=True, message="Comment deleted successfully")
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.GenericResponse(success=False, message=f"Failed to delete comment: {e}")
 
     def GetComments(self, request, context):
-        try:
-            print(f"GetComments called with post_id: {request.post_id}, page: {request.page}, limit: {request.limit}")
-            
-            # Validate page number
-            total_comments = self.repository.get_post_comment_count(request.post_id)
-            print(f"Total comments for post {request.post_id}: {total_comments}")
-            
-            total_pages = (total_comments + request.limit - 1) // request.limit
-            if total_pages == 0:
-                total_pages = 1
-            print(f"Total pages: {total_pages}")
-            
-            # If requested page is greater than total pages, return first page
-            page = min(request.page, total_pages)
-            if page < 1:
-                page = 1
-            print(f"Using page: {page}")
+        post_id = parse_uuid(request.post_id)
+        if not post_id:
+            return post_pb2.CommentListResponse(success=False, message="post_id is required")
 
-            comments, total = self.repository.get_comments(
-                post_id=request.post_id,
-                page=page,
-                limit=request.limit
-            )
-            print(f"Retrieved {len(comments)} comments")
-            
-            # Debug print each comment
-            for comment in comments:
-                print(f"Comment ID: {comment.id}, User ID: {comment.user_id}, "
-                      f"User: {comment.user.first_name if comment.user else 'None'} "
-                      f"{comment.user.last_name if comment.user else 'None'}, "
-                      f"Role: {comment.user.role if comment.user else 'None'}")
-                print(f"Has {len(comment.replies)} replies")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 10))
 
-            response = post_pb2.CommentListResponse(
-                success=True,
-                message="Comments retrieved successfully",
-                comments=[self._convert_to_proto_comment(c) for c in comments],
-                total_count=total,
-                page=page,
-                total_pages=total_pages
-            )
-            print("Successfully created CommentListResponse")
-            return response
-        except Exception as e:
-            print(f"Error in GetComments: {str(e)}")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.CommentListResponse(
-                success=False,
-                message=f"Failed to get comments: {str(e)}"
-            )
+        with self._session() as (_, repo):
+            try:
+                total_comments = repo.get_post_comment_count(post_id)
+                total_pages = max(1, (total_comments + limit - 1) // limit)
+                page = min(page, total_pages)
+                comments, total = repo.get_comments(post_id=post_id, page=page, limit=limit)
+                return post_pb2.CommentListResponse(
+                    success=True,
+                    message="Comments retrieved successfully",
+                    comments=[self._convert_to_proto_comment(c, repo) for c in comments],
+                    total_count=total,
+                    page=page,
+                    total_pages=total_pages,
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.CommentListResponse(success=False, message=f"Failed to get comments: {e}")
 
     def LikeComment(self, request, context):
-        try:
-            # First check if user exists
-            user = self.db.query(User).filter(User.id == request.user_id).first()
-            if not user:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.CommentResponse(
-                    success=False,
-                    message=f"User with id {request.user_id} not found"
-                )
+        comment_id = parse_uuid(request.comment_id)
+        user_id = parse_uuid(request.user_id)
+        if not comment_id or not user_id:
+            return post_pb2.CommentResponse(success=False, message="comment_id and user_id are required")
 
-            # Check if comment exists first
-            comment = self.repository.get_comment(request.comment_id)
-            if not comment:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"Comment with id {request.comment_id} not found")
-                return post_pb2.CommentResponse(
-                    success=False,
-                    message=f"Comment with id {request.comment_id} not found"
-                )
-
+        with self._session() as (_, repo):
             try:
-                comment = self.repository.like_comment(
-                    comment_id=request.comment_id,
-                    user_id=request.user_id,
-                    reaction_type=request.reaction_type
-                )
+                comment = repo.like_comment(comment_id, user_id, request.reaction_type)
                 return post_pb2.CommentResponse(
                     success=True,
                     message="Comment liked successfully",
-                    comment=self._convert_to_proto_comment(comment)
+                    comment=self._convert_to_proto_comment(comment, repo),
                 )
             except Exception as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(str(e))
-                return post_pb2.CommentResponse(
-                    success=False,
-                    message=f"Failed to like comment: {str(e)}"
-                )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.CommentResponse(
-                success=False,
-                message=f"Failed to like comment: {str(e)}"
-            )
+                return post_pb2.CommentResponse(success=False, message=f"Failed to like comment: {e}")
 
     def UnlikeComment(self, request, context):
-        try:
-            # First check if user exists
-            user = self.db.query(User).filter(User.id == request.user_id).first()
-            if not user:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User with id {request.user_id} not found")
-                return post_pb2.CommentResponse(
-                    success=False,
-                    message=f"User with id {request.user_id} not found"
-                )
+        comment_id = parse_uuid(request.comment_id)
+        user_id = parse_uuid(request.user_id)
+        if not comment_id or not user_id:
+            return post_pb2.CommentResponse(success=False, message="comment_id and user_id are required")
 
-            # Check if comment exists first
-            comment = self.repository.get_comment(request.comment_id)
-            if not comment:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"Comment with id {request.comment_id} not found")
-                return post_pb2.CommentResponse(
-                    success=False,
-                    message=f"Comment with id {request.comment_id} not found"
-                )
-
+        with self._session() as (_, repo):
             try:
-                comment = self.repository.unlike_comment(
-                    comment_id=request.comment_id,
-                    user_id=request.user_id
-                )
+                comment = repo.unlike_comment(comment_id, user_id)
                 return post_pb2.CommentResponse(
                     success=True,
                     message="Comment unliked successfully",
-                    comment=self._convert_to_proto_comment(comment)
+                    comment=self._convert_to_proto_comment(comment, repo),
                 )
             except Exception as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(str(e))
-                return post_pb2.CommentResponse(
-                    success=False,
-                    message=f"Failed to unlike comment: {str(e)}"
+                return post_pb2.CommentResponse(success=False, message=f"Failed to unlike comment: {e}")
+
+    # ------------------------------------------------------------------ posts
+    def GetMyPosts(self, request, context):
+        user_id = parse_uuid(request.user_id)
+        if not user_id:
+            return post_pb2.PostListResponse(success=False, message="user_id is required")
+        with self._session() as (_, repo):
+            try:
+                posts, total = repo.get_posts_by_user(user_id, request.page, request.limit)
+                return self._list_posts_response(posts, total, request.page, request.limit, user_id, repo)
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=str(e))
+
+    def GetPublicPosts(self, request, context):
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            try:
+                posts, total = repo.get_public_posts(page=page, limit=limit)
+                return self._list_posts_response(posts, total, page, limit, request.viewer_user_id, repo)
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=str(e))
+
+    def GetPropertyPosts(self, request, context):
+        property_id = parse_uuid(request.property_id)
+        if not property_id:
+            return post_pb2.PostListResponse(success=False, message="property_id is required")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            try:
+                posts, total = repo.get_property_posts(property_id, page, limit)
+                return self._list_posts_response(posts, total, page, limit, request.viewer_user_id, repo)
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=str(e))
+
+    def GetBuilderPosts(self, request, context):
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        builder_id = parse_uuid(getattr(request, "builder_user_id", None))
+        user_ids = [uid for uid in (parse_uuid(x) for x in request.user_ids) if uid]
+        with self._session() as (_, repo):
+            try:
+                posts, total = repo.get_builder_posts(
+                    builder_user_id=builder_id,
+                    user_ids=user_ids or None,
+                    page=page,
+                    limit=limit,
                 )
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(e))
-            return post_pb2.CommentResponse(
-                success=False,
-                message=f"Failed to unlike comment: {str(e)}"
+                return self._list_posts_response(posts, total, page, limit, request.viewer_user_id, repo)
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostListResponse(success=False, message=str(e))
+
+    def PinPost(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.PostResponse(success=False, message="post_id and user_id are required")
+        with self._session() as (_, repo):
+            post = repo.pin_post(post_id, user_id)
+            if not post:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.PostResponse(success=False, message="Post not found or not authorized")
+            return post_pb2.PostResponse(success=True, message="Post pinned", post=self._convert_to_proto_post(post, repository=repo))
+
+    def UnpinPost(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.PostResponse(success=False, message="post_id and user_id are required")
+        with self._session() as (_, repo):
+            post = repo.unpin_post(post_id, user_id)
+            if not post:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.PostResponse(success=False, message="Post not found or not authorized")
+            return post_pb2.PostResponse(success=True, message="Post unpinned", post=self._convert_to_proto_post(post, repository=repo))
+
+    def ArchivePost(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.PostResponse(success=False, message="post_id and user_id are required")
+        with self._session() as (_, repo):
+            post = repo.archive_post(post_id, user_id)
+            if not post:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.PostResponse(success=False, message="Post not found or not authorized")
+            return post_pb2.PostResponse(success=True, message="Post archived", post=self._convert_to_proto_post(post, repository=repo))
+
+    def RestoreArchivedPost(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.PostResponse(success=False, message="post_id and user_id are required")
+        with self._session() as (_, repo):
+            post = repo.restore_archived_post(post_id, user_id)
+            if not post:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.PostResponse(success=False, message="Post not found or not authorized")
+            return post_pb2.PostResponse(success=True, message="Post restored", post=self._convert_to_proto_post(post, repository=repo))
+
+    # ------------------------------------------------------------------ likes
+    def GetPostLikes(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        if not post_id:
+            return post_pb2.PostLikeListResponse(success=False, message="post_id is required")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            try:
+                likes, total = repo.get_post_likes(post_id, page, limit)
+                total_pages = max(1, (total + limit - 1) // limit)
+                return post_pb2.PostLikeListResponse(
+                    success=True,
+                    message="Post likes retrieved",
+                    likes=[
+                        post_pb2.PostLikeUser(
+                            user_id=uuid_str(like.user_id),
+                            first_name="",
+                            last_name="",
+                            user_role="",
+                            reaction_type=like.reaction_type or "LIKE",
+                            liked_at=self._convert_timestamp(like.created_at),
+                        )
+                        for like in likes
+                    ],
+                    total_count=total,
+                    page=page,
+                    total_pages=total_pages,
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.PostLikeListResponse(success=False, message=str(e))
+
+    def CheckLikeStatus(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        user_id = parse_uuid(request.user_id)
+        if not post_id or not user_id:
+            return post_pb2.CheckLikeStatusResponse(success=False, message="post_id and user_id are required")
+        with self._session() as (_, repo):
+            is_liked, reaction = repo.check_like_status(post_id, user_id)
+            return post_pb2.CheckLikeStatusResponse(
+                success=True,
+                message="Like status retrieved",
+                is_liked=is_liked,
+                reaction_type=reaction or "",
             )
+
+    # ---------------------------------------------------------------- comments
+    def GetComment(self, request, context):
+        comment_id = parse_uuid(request.comment_id)
+        if not comment_id:
+            return post_pb2.CommentResponse(success=False, message="comment_id is required")
+        with self._session() as (_, repo):
+            comment = repo.get_comment_with_user(comment_id)
+            if not comment:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.CommentResponse(success=False, message="Comment not found")
+            return post_pb2.CommentResponse(
+                success=True,
+                message="Comment retrieved",
+                comment=self._convert_to_proto_comment(comment, repo),
+            )
+
+    def ReplyComment(self, request, context):
+        if not parse_uuid(request.parent_comment_id):
+            return post_pb2.CommentResponse(success=False, message="parent_comment_id is required for replies")
+        return self.CreateComment(request, context)
+
+    def GetReplies(self, request, context):
+        comment_id = parse_uuid(request.comment_id)
+        if not comment_id:
+            return post_pb2.CommentListResponse(success=False, message="comment_id is required")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            replies, total = repo.get_replies(comment_id, page, limit)
+            total_pages = max(1, (total + limit - 1) // limit)
+            return post_pb2.CommentListResponse(
+                success=True,
+                message="Replies retrieved",
+                comments=[self._convert_to_proto_comment(c, repo) for c in replies],
+                total_count=total,
+                page=page,
+                total_pages=total_pages,
+            )
+
+    def ReportComment(self, request, context):
+        return self._create_report(
+            context,
+            entity_type="COMMENT",
+            entity_id=parse_uuid(request.comment_id),
+            reported_by=parse_uuid(request.reported_by),
+            reported_user_id=parse_uuid(request.reported_user_id),
+            reason_code=request.reason_code,
+            description=request.description,
+        )
+
+    # ------------------------------------------------------------------ share
+    def _convert_to_proto_share(self, share, post=None, repository=None):
+        return post_pb2.PostShare(
+            id=uuid_str(share.id),
+            share_code=share.share_code or "",
+            post_id=uuid_str(share.post_id),
+            shared_by=uuid_str(share.shared_by),
+            share_type=share.share_type or "SHARE",
+            caption=share.caption or "",
+            visibility=share.visibility or "PUBLIC",
+            created_at=self._convert_timestamp(share.created_at),
+            post=self._convert_to_proto_post(post, repository=repository) if post else None,
+        )
+
+    def SharePost(self, request, context):
+        post_id = parse_uuid(request.post_id)
+        shared_by = parse_uuid(request.shared_by)
+        if not post_id or not shared_by:
+            return post_pb2.PostShareResponse(success=False, message="post_id and shared_by are required")
+        with self._session() as (_, repo):
+            share = repo.share_post(
+                post_id=post_id,
+                shared_by=shared_by,
+                share_type=request.share_type,
+                caption=request.caption,
+                visibility=request.visibility,
+            )
+            if not share:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.PostShareResponse(success=False, message="Post not found or sharing disabled")
+            post = repo.get_post(post_id)
+            return post_pb2.PostShareResponse(
+                success=True,
+                message="Post shared",
+                share=self._convert_to_proto_share(share, post, repo),
+            )
+
+    def GetSharedPosts(self, request, context):
+        user_id = parse_uuid(request.user_id)
+        if not user_id:
+            return post_pb2.PostShareListResponse(success=False, message="user_id is required")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            shares, total = repo.get_shared_posts(user_id, page, limit)
+            total_pages = max(1, (total + limit - 1) // limit)
+            items = []
+            for share in shares:
+                post = repo.get_post(share.post_id)
+                items.append(self._convert_to_proto_share(share, post, repo))
+            return post_pb2.PostShareListResponse(
+                success=True,
+                message="Shared posts retrieved",
+                shares=items,
+                total_count=total,
+                page=page,
+                total_pages=total_pages,
+            )
+
+    def DeleteSharedPost(self, request, context):
+        share_id = parse_uuid(request.share_id)
+        user_id = parse_uuid(request.user_id)
+        if not share_id or not user_id:
+            return post_pb2.GenericResponse(success=False, message="share_id and user_id are required")
+        with self._session() as (_, repo):
+            if not repo.delete_shared_post(share_id, user_id):
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                return post_pb2.GenericResponse(success=False, message="Share not found or not authorized")
+            return post_pb2.GenericResponse(success=True, message="Shared post deleted")
+
+    # ----------------------------------------------------------------- reports
+    def _convert_to_proto_report(self, report):
+        return post_pb2.Report(
+            id=uuid_str(report.id),
+            report_code=report.report_code or "",
+            entity_type=report.entity_type or "",
+            entity_id=uuid_str(report.entity_id),
+            reported_by=uuid_str(report.reported_by),
+            reported_user_id=uuid_str(report.reported_user_id),
+            reason_code=report.reason_code or "",
+            description=report.description or "",
+            status=report.status or "PENDING",
+            priority=report.priority or "MEDIUM",
+            created_at=self._convert_timestamp(report.created_at),
+        )
+
+    def _create_report(self, context, entity_type, entity_id, reported_by, reported_user_id, reason_code, description):
+        if not entity_id or not reported_by:
+            return post_pb2.ReportResponse(success=False, message="entity_id and reported_by are required")
+        with self._session() as (_, repo):
+            try:
+                report = repo.create_report(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    reported_by=reported_by,
+                    reported_user_id=reported_user_id,
+                    reason_code=reason_code,
+                    description=description,
+                )
+                return post_pb2.ReportResponse(
+                    success=True,
+                    message="Report submitted",
+                    report=self._convert_to_proto_report(report),
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.ReportResponse(success=False, message=str(e))
+
+    def ReportPost(self, request, context):
+        return self._create_report(
+            context,
+            entity_type="POST",
+            entity_id=parse_uuid(request.post_id),
+            reported_by=parse_uuid(request.reported_by),
+            reported_user_id=parse_uuid(request.reported_user_id),
+            reason_code=request.reason_code,
+            description=request.description,
+        )
+
+    def ReportProperty(self, request, context):
+        return self._create_report(
+            context,
+            entity_type="PROPERTY",
+            entity_id=parse_uuid(request.property_id),
+            reported_by=parse_uuid(request.reported_by),
+            reported_user_id=parse_uuid(request.reported_user_id),
+            reason_code=request.reason_code,
+            description=request.description,
+        )
+
+    def ReportUser(self, request, context):
+        reported_user_id = parse_uuid(request.user_id)
+        return self._create_report(
+            context,
+            entity_type="USER",
+            entity_id=reported_user_id,
+            reported_by=parse_uuid(request.reported_by),
+            reported_user_id=reported_user_id,
+            reason_code=request.reason_code,
+            description=request.description,
+        )
+
+    def GetMyReports(self, request, context):
+        reported_by = parse_uuid(request.reported_by)
+        if not reported_by:
+            return post_pb2.ReportListResponse(success=False, message="reported_by is required")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            reports, total = repo.get_reports_by_user(reported_by, page, limit)
+            total_pages = max(1, (total + limit - 1) // limit)
+            return post_pb2.ReportListResponse(
+                success=True,
+                message="Reports retrieved",
+                reports=[self._convert_to_proto_report(r) for r in reports],
+                total_count=total,
+                page=page,
+                total_pages=total_pages,
+            )
+
 
 def serve():
     port = os.getenv("PORT", "50055")
-    engine = get_db_engine()
-    # Import models so they register with Base.metadata before create_all
-    from ..entity.post_entity import Post, PostLike, CommentLike  # noqa: F401
-    from ..entity.comment_entity import Comment  # noqa: F401
-    from ..entity.user_entity import User  # noqa: F401
-    from ..entity.media_entity import media  # noqa: F401
-    from ..utils.db_connection import Base
-
-    try:
-        Base.metadata.create_all(engine)
-        print("Database tables verified!")
-    except Exception as e:
-        print(f"[WARN] Could not verify/create tables: {e}")
+    get_db_engine()
 
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=10),
-        interceptors=[AuthServerInterceptor()]
+        interceptors=[AuthServerInterceptor()],
     )
     post_pb2_grpc.add_PostsServiceServicer_to_server(PostsService(), server)
     server.add_insecure_port(f"0.0.0.0:{port}")
     server.start()
-    print(f"Posts service started on port {port}")
+    print(f"Posts service started on port {port} (schemas: post, user, api_gateway)")
     server.wait_for_termination()
 
+
 if __name__ == "__main__":
-    serve() 
+    serve()

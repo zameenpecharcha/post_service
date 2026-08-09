@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from app.proto_files import post_pb2 as post__pb2
+from . import post_pb2 as post__pb2
 
 GRPC_GENERATED_VERSION = '1.73.1'
 GRPC_VERSION = grpc.__version__
@@ -26,7 +26,10 @@ if _version_not_supported:
 
 
 class PostsServiceStub(object):
-    """Posts Service Definition
+    """---------------------------------------------------------------------------
+    Service
+    ---------------------------------------------------------------------------
+
     """
 
     def __init__(self, channel):
@@ -60,6 +63,26 @@ class PostsServiceStub(object):
                 request_serializer=post__pb2.GetPostsByUserRequest.SerializeToString,
                 response_deserializer=post__pb2.PostListResponse.FromString,
                 _registered_method=True)
+        self.GetMyPosts = channel.unary_unary(
+                '/posts.PostsService/GetMyPosts',
+                request_serializer=post__pb2.GetMyPostsRequest.SerializeToString,
+                response_deserializer=post__pb2.PostListResponse.FromString,
+                _registered_method=True)
+        self.GetPublicPosts = channel.unary_unary(
+                '/posts.PostsService/GetPublicPosts',
+                request_serializer=post__pb2.GetPublicPostsRequest.SerializeToString,
+                response_deserializer=post__pb2.PostListResponse.FromString,
+                _registered_method=True)
+        self.GetPropertyPosts = channel.unary_unary(
+                '/posts.PostsService/GetPropertyPosts',
+                request_serializer=post__pb2.GetPropertyPostsRequest.SerializeToString,
+                response_deserializer=post__pb2.PostListResponse.FromString,
+                _registered_method=True)
+        self.GetBuilderPosts = channel.unary_unary(
+                '/posts.PostsService/GetBuilderPosts',
+                request_serializer=post__pb2.GetBuilderPostsRequest.SerializeToString,
+                response_deserializer=post__pb2.PostListResponse.FromString,
+                _registered_method=True)
         self.SearchPosts = channel.unary_unary(
                 '/posts.PostsService/SearchPosts',
                 request_serializer=post__pb2.SearchPostsRequest.SerializeToString,
@@ -69,6 +92,26 @@ class PostsServiceStub(object):
                 '/posts.PostsService/TrendingPosts',
                 request_serializer=post__pb2.TrendingPostsRequest.SerializeToString,
                 response_deserializer=post__pb2.PostListResponse.FromString,
+                _registered_method=True)
+        self.PinPost = channel.unary_unary(
+                '/posts.PostsService/PinPost',
+                request_serializer=post__pb2.PostOwnerRequest.SerializeToString,
+                response_deserializer=post__pb2.PostResponse.FromString,
+                _registered_method=True)
+        self.UnpinPost = channel.unary_unary(
+                '/posts.PostsService/UnpinPost',
+                request_serializer=post__pb2.PostOwnerRequest.SerializeToString,
+                response_deserializer=post__pb2.PostResponse.FromString,
+                _registered_method=True)
+        self.ArchivePost = channel.unary_unary(
+                '/posts.PostsService/ArchivePost',
+                request_serializer=post__pb2.PostOwnerRequest.SerializeToString,
+                response_deserializer=post__pb2.PostResponse.FromString,
+                _registered_method=True)
+        self.RestoreArchivedPost = channel.unary_unary(
+                '/posts.PostsService/RestoreArchivedPost',
+                request_serializer=post__pb2.PostOwnerRequest.SerializeToString,
+                response_deserializer=post__pb2.PostResponse.FromString,
                 _registered_method=True)
         self.AddPostMedia = channel.unary_unary(
                 '/posts.PostsService/AddPostMedia',
@@ -90,6 +133,16 @@ class PostsServiceStub(object):
                 request_serializer=post__pb2.LikeRequest.SerializeToString,
                 response_deserializer=post__pb2.PostResponse.FromString,
                 _registered_method=True)
+        self.GetPostLikes = channel.unary_unary(
+                '/posts.PostsService/GetPostLikes',
+                request_serializer=post__pb2.GetPostLikesRequest.SerializeToString,
+                response_deserializer=post__pb2.PostLikeListResponse.FromString,
+                _registered_method=True)
+        self.CheckLikeStatus = channel.unary_unary(
+                '/posts.PostsService/CheckLikeStatus',
+                request_serializer=post__pb2.CheckLikeStatusRequest.SerializeToString,
+                response_deserializer=post__pb2.CheckLikeStatusResponse.FromString,
+                _registered_method=True)
         self.CreateComment = channel.unary_unary(
                 '/posts.PostsService/CreateComment',
                 request_serializer=post__pb2.CommentCreateRequest.SerializeToString,
@@ -110,6 +163,21 @@ class PostsServiceStub(object):
                 request_serializer=post__pb2.GetCommentsRequest.SerializeToString,
                 response_deserializer=post__pb2.CommentListResponse.FromString,
                 _registered_method=True)
+        self.GetComment = channel.unary_unary(
+                '/posts.PostsService/GetComment',
+                request_serializer=post__pb2.CommentRequest.SerializeToString,
+                response_deserializer=post__pb2.CommentResponse.FromString,
+                _registered_method=True)
+        self.ReplyComment = channel.unary_unary(
+                '/posts.PostsService/ReplyComment',
+                request_serializer=post__pb2.CommentCreateRequest.SerializeToString,
+                response_deserializer=post__pb2.CommentResponse.FromString,
+                _registered_method=True)
+        self.GetReplies = channel.unary_unary(
+                '/posts.PostsService/GetReplies',
+                request_serializer=post__pb2.GetRepliesRequest.SerializeToString,
+                response_deserializer=post__pb2.CommentListResponse.FromString,
+                _registered_method=True)
         self.LikeComment = channel.unary_unary(
                 '/posts.PostsService/LikeComment',
                 request_serializer=post__pb2.CommentLikeRequest.SerializeToString,
@@ -120,14 +188,57 @@ class PostsServiceStub(object):
                 request_serializer=post__pb2.CommentLikeRequest.SerializeToString,
                 response_deserializer=post__pb2.CommentResponse.FromString,
                 _registered_method=True)
+        self.ReportComment = channel.unary_unary(
+                '/posts.PostsService/ReportComment',
+                request_serializer=post__pb2.ReportCommentRequest.SerializeToString,
+                response_deserializer=post__pb2.ReportResponse.FromString,
+                _registered_method=True)
+        self.SharePost = channel.unary_unary(
+                '/posts.PostsService/SharePost',
+                request_serializer=post__pb2.SharePostRequest.SerializeToString,
+                response_deserializer=post__pb2.PostShareResponse.FromString,
+                _registered_method=True)
+        self.GetSharedPosts = channel.unary_unary(
+                '/posts.PostsService/GetSharedPosts',
+                request_serializer=post__pb2.GetSharedPostsRequest.SerializeToString,
+                response_deserializer=post__pb2.PostShareListResponse.FromString,
+                _registered_method=True)
+        self.DeleteSharedPost = channel.unary_unary(
+                '/posts.PostsService/DeleteSharedPost',
+                request_serializer=post__pb2.DeleteSharedPostRequest.SerializeToString,
+                response_deserializer=post__pb2.GenericResponse.FromString,
+                _registered_method=True)
+        self.ReportPost = channel.unary_unary(
+                '/posts.PostsService/ReportPost',
+                request_serializer=post__pb2.ReportPostRequest.SerializeToString,
+                response_deserializer=post__pb2.ReportResponse.FromString,
+                _registered_method=True)
+        self.ReportProperty = channel.unary_unary(
+                '/posts.PostsService/ReportProperty',
+                request_serializer=post__pb2.ReportPropertyRequest.SerializeToString,
+                response_deserializer=post__pb2.ReportResponse.FromString,
+                _registered_method=True)
+        self.ReportUser = channel.unary_unary(
+                '/posts.PostsService/ReportUser',
+                request_serializer=post__pb2.ReportUserRequest.SerializeToString,
+                response_deserializer=post__pb2.ReportResponse.FromString,
+                _registered_method=True)
+        self.GetMyReports = channel.unary_unary(
+                '/posts.PostsService/GetMyReports',
+                request_serializer=post__pb2.GetMyReportsRequest.SerializeToString,
+                response_deserializer=post__pb2.ReportListResponse.FromString,
+                _registered_method=True)
 
 
 class PostsServiceServicer(object):
-    """Posts Service Definition
+    """---------------------------------------------------------------------------
+    Service
+    ---------------------------------------------------------------------------
+
     """
 
     def CreatePost(self, request, context):
-        """Post Operations
+        """Post operations
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -157,6 +268,30 @@ class PostsServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetMyPosts(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPublicPosts(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetPropertyPosts(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetBuilderPosts(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SearchPosts(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -169,8 +304,32 @@ class PostsServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PinPost(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UnpinPost(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ArchivePost(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RestoreArchivedPost(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def AddPostMedia(self, request, context):
-        """Media Operations
+        """Media operations
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -183,7 +342,7 @@ class PostsServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def LikePost(self, request, context):
-        """Like Operations
+        """Post like operations
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -195,8 +354,20 @@ class PostsServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetPostLikes(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CheckLikeStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def CreateComment(self, request, context):
-        """Comment Operations
+        """Comment operations
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -220,6 +391,24 @@ class PostsServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetComment(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReplyComment(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetReplies(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def LikeComment(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -227,6 +416,56 @@ class PostsServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def UnlikeComment(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReportComment(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SharePost(self, request, context):
+        """Share operations
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetSharedPosts(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteSharedPost(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReportPost(self, request, context):
+        """Report operations
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReportProperty(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReportUser(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetMyReports(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -260,6 +499,26 @@ def add_PostsServiceServicer_to_server(servicer, server):
                     request_deserializer=post__pb2.GetPostsByUserRequest.FromString,
                     response_serializer=post__pb2.PostListResponse.SerializeToString,
             ),
+            'GetMyPosts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetMyPosts,
+                    request_deserializer=post__pb2.GetMyPostsRequest.FromString,
+                    response_serializer=post__pb2.PostListResponse.SerializeToString,
+            ),
+            'GetPublicPosts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPublicPosts,
+                    request_deserializer=post__pb2.GetPublicPostsRequest.FromString,
+                    response_serializer=post__pb2.PostListResponse.SerializeToString,
+            ),
+            'GetPropertyPosts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPropertyPosts,
+                    request_deserializer=post__pb2.GetPropertyPostsRequest.FromString,
+                    response_serializer=post__pb2.PostListResponse.SerializeToString,
+            ),
+            'GetBuilderPosts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetBuilderPosts,
+                    request_deserializer=post__pb2.GetBuilderPostsRequest.FromString,
+                    response_serializer=post__pb2.PostListResponse.SerializeToString,
+            ),
             'SearchPosts': grpc.unary_unary_rpc_method_handler(
                     servicer.SearchPosts,
                     request_deserializer=post__pb2.SearchPostsRequest.FromString,
@@ -269,6 +528,26 @@ def add_PostsServiceServicer_to_server(servicer, server):
                     servicer.TrendingPosts,
                     request_deserializer=post__pb2.TrendingPostsRequest.FromString,
                     response_serializer=post__pb2.PostListResponse.SerializeToString,
+            ),
+            'PinPost': grpc.unary_unary_rpc_method_handler(
+                    servicer.PinPost,
+                    request_deserializer=post__pb2.PostOwnerRequest.FromString,
+                    response_serializer=post__pb2.PostResponse.SerializeToString,
+            ),
+            'UnpinPost': grpc.unary_unary_rpc_method_handler(
+                    servicer.UnpinPost,
+                    request_deserializer=post__pb2.PostOwnerRequest.FromString,
+                    response_serializer=post__pb2.PostResponse.SerializeToString,
+            ),
+            'ArchivePost': grpc.unary_unary_rpc_method_handler(
+                    servicer.ArchivePost,
+                    request_deserializer=post__pb2.PostOwnerRequest.FromString,
+                    response_serializer=post__pb2.PostResponse.SerializeToString,
+            ),
+            'RestoreArchivedPost': grpc.unary_unary_rpc_method_handler(
+                    servicer.RestoreArchivedPost,
+                    request_deserializer=post__pb2.PostOwnerRequest.FromString,
+                    response_serializer=post__pb2.PostResponse.SerializeToString,
             ),
             'AddPostMedia': grpc.unary_unary_rpc_method_handler(
                     servicer.AddPostMedia,
@@ -290,6 +569,16 @@ def add_PostsServiceServicer_to_server(servicer, server):
                     request_deserializer=post__pb2.LikeRequest.FromString,
                     response_serializer=post__pb2.PostResponse.SerializeToString,
             ),
+            'GetPostLikes': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetPostLikes,
+                    request_deserializer=post__pb2.GetPostLikesRequest.FromString,
+                    response_serializer=post__pb2.PostLikeListResponse.SerializeToString,
+            ),
+            'CheckLikeStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.CheckLikeStatus,
+                    request_deserializer=post__pb2.CheckLikeStatusRequest.FromString,
+                    response_serializer=post__pb2.CheckLikeStatusResponse.SerializeToString,
+            ),
             'CreateComment': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateComment,
                     request_deserializer=post__pb2.CommentCreateRequest.FromString,
@@ -310,6 +599,21 @@ def add_PostsServiceServicer_to_server(servicer, server):
                     request_deserializer=post__pb2.GetCommentsRequest.FromString,
                     response_serializer=post__pb2.CommentListResponse.SerializeToString,
             ),
+            'GetComment': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetComment,
+                    request_deserializer=post__pb2.CommentRequest.FromString,
+                    response_serializer=post__pb2.CommentResponse.SerializeToString,
+            ),
+            'ReplyComment': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReplyComment,
+                    request_deserializer=post__pb2.CommentCreateRequest.FromString,
+                    response_serializer=post__pb2.CommentResponse.SerializeToString,
+            ),
+            'GetReplies': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetReplies,
+                    request_deserializer=post__pb2.GetRepliesRequest.FromString,
+                    response_serializer=post__pb2.CommentListResponse.SerializeToString,
+            ),
             'LikeComment': grpc.unary_unary_rpc_method_handler(
                     servicer.LikeComment,
                     request_deserializer=post__pb2.CommentLikeRequest.FromString,
@@ -320,6 +624,46 @@ def add_PostsServiceServicer_to_server(servicer, server):
                     request_deserializer=post__pb2.CommentLikeRequest.FromString,
                     response_serializer=post__pb2.CommentResponse.SerializeToString,
             ),
+            'ReportComment': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportComment,
+                    request_deserializer=post__pb2.ReportCommentRequest.FromString,
+                    response_serializer=post__pb2.ReportResponse.SerializeToString,
+            ),
+            'SharePost': grpc.unary_unary_rpc_method_handler(
+                    servicer.SharePost,
+                    request_deserializer=post__pb2.SharePostRequest.FromString,
+                    response_serializer=post__pb2.PostShareResponse.SerializeToString,
+            ),
+            'GetSharedPosts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetSharedPosts,
+                    request_deserializer=post__pb2.GetSharedPostsRequest.FromString,
+                    response_serializer=post__pb2.PostShareListResponse.SerializeToString,
+            ),
+            'DeleteSharedPost': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteSharedPost,
+                    request_deserializer=post__pb2.DeleteSharedPostRequest.FromString,
+                    response_serializer=post__pb2.GenericResponse.SerializeToString,
+            ),
+            'ReportPost': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportPost,
+                    request_deserializer=post__pb2.ReportPostRequest.FromString,
+                    response_serializer=post__pb2.ReportResponse.SerializeToString,
+            ),
+            'ReportProperty': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportProperty,
+                    request_deserializer=post__pb2.ReportPropertyRequest.FromString,
+                    response_serializer=post__pb2.ReportResponse.SerializeToString,
+            ),
+            'ReportUser': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportUser,
+                    request_deserializer=post__pb2.ReportUserRequest.FromString,
+                    response_serializer=post__pb2.ReportResponse.SerializeToString,
+            ),
+            'GetMyReports': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetMyReports,
+                    request_deserializer=post__pb2.GetMyReportsRequest.FromString,
+                    response_serializer=post__pb2.ReportListResponse.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'posts.PostsService', rpc_method_handlers)
@@ -329,7 +673,10 @@ def add_PostsServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class PostsService(object):
-    """Posts Service Definition
+    """---------------------------------------------------------------------------
+    Service
+    ---------------------------------------------------------------------------
+
     """
 
     @staticmethod
@@ -468,6 +815,114 @@ class PostsService(object):
             _registered_method=True)
 
     @staticmethod
+    def GetMyPosts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetMyPosts',
+            post__pb2.GetMyPostsRequest.SerializeToString,
+            post__pb2.PostListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPublicPosts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetPublicPosts',
+            post__pb2.GetPublicPostsRequest.SerializeToString,
+            post__pb2.PostListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetPropertyPosts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetPropertyPosts',
+            post__pb2.GetPropertyPostsRequest.SerializeToString,
+            post__pb2.PostListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetBuilderPosts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetBuilderPosts',
+            post__pb2.GetBuilderPostsRequest.SerializeToString,
+            post__pb2.PostListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def SearchPosts(request,
             target,
             options=(),
@@ -511,6 +966,114 @@ class PostsService(object):
             '/posts.PostsService/TrendingPosts',
             post__pb2.TrendingPostsRequest.SerializeToString,
             post__pb2.PostListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PinPost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/PinPost',
+            post__pb2.PostOwnerRequest.SerializeToString,
+            post__pb2.PostResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UnpinPost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/UnpinPost',
+            post__pb2.PostOwnerRequest.SerializeToString,
+            post__pb2.PostResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ArchivePost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/ArchivePost',
+            post__pb2.PostOwnerRequest.SerializeToString,
+            post__pb2.PostResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RestoreArchivedPost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/RestoreArchivedPost',
+            post__pb2.PostOwnerRequest.SerializeToString,
+            post__pb2.PostResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -630,6 +1193,60 @@ class PostsService(object):
             _registered_method=True)
 
     @staticmethod
+    def GetPostLikes(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetPostLikes',
+            post__pb2.GetPostLikesRequest.SerializeToString,
+            post__pb2.PostLikeListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CheckLikeStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/CheckLikeStatus',
+            post__pb2.CheckLikeStatusRequest.SerializeToString,
+            post__pb2.CheckLikeStatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def CreateComment(request,
             target,
             options=(),
@@ -738,6 +1355,87 @@ class PostsService(object):
             _registered_method=True)
 
     @staticmethod
+    def GetComment(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetComment',
+            post__pb2.CommentRequest.SerializeToString,
+            post__pb2.CommentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReplyComment(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/ReplyComment',
+            post__pb2.CommentCreateRequest.SerializeToString,
+            post__pb2.CommentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetReplies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetReplies',
+            post__pb2.GetRepliesRequest.SerializeToString,
+            post__pb2.CommentListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def LikeComment(request,
             target,
             options=(),
@@ -781,6 +1479,222 @@ class PostsService(object):
             '/posts.PostsService/UnlikeComment',
             post__pb2.CommentLikeRequest.SerializeToString,
             post__pb2.CommentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportComment(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/ReportComment',
+            post__pb2.ReportCommentRequest.SerializeToString,
+            post__pb2.ReportResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SharePost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/SharePost',
+            post__pb2.SharePostRequest.SerializeToString,
+            post__pb2.PostShareResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetSharedPosts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetSharedPosts',
+            post__pb2.GetSharedPostsRequest.SerializeToString,
+            post__pb2.PostShareListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteSharedPost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/DeleteSharedPost',
+            post__pb2.DeleteSharedPostRequest.SerializeToString,
+            post__pb2.GenericResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportPost(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/ReportPost',
+            post__pb2.ReportPostRequest.SerializeToString,
+            post__pb2.ReportResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportProperty(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/ReportProperty',
+            post__pb2.ReportPropertyRequest.SerializeToString,
+            post__pb2.ReportResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportUser(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/ReportUser',
+            post__pb2.ReportUserRequest.SerializeToString,
+            post__pb2.ReportResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetMyReports(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/posts.PostsService/GetMyReports',
+            post__pb2.GetMyReportsRequest.SerializeToString,
+            post__pb2.ReportListResponse.FromString,
             options,
             channel_credentials,
             insecure,

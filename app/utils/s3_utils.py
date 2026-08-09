@@ -1,7 +1,7 @@
 import base64
 import os
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 import mimetypes
 from uuid import uuid4
 
@@ -10,6 +10,36 @@ from botocore.exceptions import ClientError
 
 
 _DATA_URL_RE = re.compile(r"^data:(?P<content_type>[^;]+);base64,(?P<data>.+)$")
+
+
+def _ssl_verify() -> Union[bool, str]:
+    """SSL bundle for boto3; set AWS_SSL_VERIFY=false on Windows if cert verify fails."""
+    flag = os.getenv("AWS_SSL_VERIFY", "true").strip().lower()
+    if flag in ("0", "false", "no"):
+        return False
+    try:
+        import certifi
+
+        return certifi.where()
+    except ImportError:
+        return True
+
+
+def _s3_client(region: str):
+    client_kwargs = {"region_name": region, "verify": _ssl_verify()}
+    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID", "").strip('"')
+    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip('"')
+    aws_session_token = os.getenv("AWS_SESSION_TOKEN")
+    if aws_access_key_id and aws_secret_access_key:
+        client_kwargs.update(
+            {
+                "aws_access_key_id": aws_access_key_id,
+                "aws_secret_access_key": aws_secret_access_key,
+            }
+        )
+        if aws_session_token:
+            client_kwargs["aws_session_token"] = aws_session_token
+    return boto3.client("s3", **client_kwargs)
 
 
 def _split_data_url(base64_string: str) -> Tuple[Optional[str], str]:
@@ -65,19 +95,7 @@ def upload_base64_to_s3(*, base64_string: str, key: str, content_type: Optional[
 
     binary_data = base64.b64decode(raw_b64)
 
-    client_kwargs = {"region_name": region}
-    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-    aws_session_token = os.getenv("AWS_SESSION_TOKEN")
-    if aws_access_key_id and aws_secret_access_key:
-        client_kwargs.update({
-            "aws_access_key_id": aws_access_key_id,
-            "aws_secret_access_key": aws_secret_access_key,
-        })
-        if aws_session_token:
-            client_kwargs["aws_session_token"] = aws_session_token
-
-    s3 = boto3.client("s3", **client_kwargs)
+    s3 = _s3_client(region)
 
     put_kwargs = {
         "Bucket": bucket,
@@ -101,7 +119,7 @@ def upload_base64_to_s3(*, base64_string: str, key: str, content_type: Optional[
     return public_url, len(binary_data)
 
 
-def build_post_key(post_id: int, media_id: int, file_name: Optional[str], content_type: Optional[str]) -> str:
+def build_post_key(post_id, media_id, file_name: Optional[str], content_type: Optional[str]) -> str:
     # Choose a sensible fallback prefix based on media kind
     kind = (content_type or "").split("/")[0].lower()
     fallback = "video" if kind == "video" else ("image" if kind == "image" else "media")
@@ -126,19 +144,7 @@ def upload_file_to_s3(*, file_path: str, key: str, content_type: Optional[str] =
         guessed, _ = mimetypes.guess_type(file_path)
         content_type = guessed or "application/octet-stream"
 
-    client_kwargs = {"region_name": region}
-    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-    aws_session_token = os.getenv("AWS_SESSION_TOKEN")
-    if aws_access_key_id and aws_secret_access_key:
-        client_kwargs.update({
-            "aws_access_key_id": aws_access_key_id,
-            "aws_secret_access_key": aws_secret_access_key,
-        })
-        if aws_session_token:
-            client_kwargs["aws_session_token"] = aws_session_token
-
-    s3 = boto3.client("s3", **client_kwargs)
+    s3 = _s3_client(region)
 
     extra_args = {"ContentType": content_type}
     size_bytes = os.path.getsize(file_path)
@@ -204,19 +210,7 @@ def generate_presigned_get_url_from_url(public_url: str, expires_in: int = 3600)
         if not bucket or not key:
             return None
 
-        client_kwargs = {"region_name": region or (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1")}
-        aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-        aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-        aws_session_token = os.getenv("AWS_SESSION_TOKEN")
-        if aws_access_key_id and aws_secret_access_key:
-            client_kwargs.update({
-                "aws_access_key_id": aws_access_key_id,
-                "aws_secret_access_key": aws_secret_access_key,
-            })
-            if aws_session_token:
-                client_kwargs["aws_session_token"] = aws_session_token
-
-        s3 = boto3.client("s3", **client_kwargs)
+        s3 = _s3_client(region or (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"))
         url = s3.generate_presigned_url(
             ClientMethod='get_object',
             Params={'Bucket': bucket, 'Key': key},
