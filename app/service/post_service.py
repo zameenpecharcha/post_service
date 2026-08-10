@@ -54,10 +54,25 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             uploaded_at=self._convert_timestamp(_get("created_at")),
         )
 
-    def _convert_to_proto_comment(self, comment, repository=None):
+    def _convert_to_proto_comment(self, comment, repository=None, include_replies: bool = True):
         like_count = comment.like_count
         if like_count is None and repository:
             like_count = repository.get_comment_like_count(comment.id)
+
+        nested = []
+        if include_replies:
+            active_replies = [
+                r
+                for r in (comment.replies or [])
+                if getattr(r, "deleted_at", None) is None
+                and (getattr(r, "status", None) or "ACTIVE") == "ACTIVE"
+            ]
+            active_replies.sort(key=lambda r: getattr(r, "created_at", None) or 0)
+            # One-level threads only
+            nested = [
+                self._convert_to_proto_comment(r, repository, include_replies=False)
+                for r in active_replies
+            ]
 
         return post_pb2.Comment(
             id=uuid_str(comment.id),
@@ -71,10 +86,12 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             status=comment.status or "ACTIVE",
             added_at=self._convert_timestamp(comment.created_at),
             commented_at=self._convert_timestamp(comment.created_at),
-            replies=[self._convert_to_proto_comment(r, repository) for r in (comment.replies or [])],
+            replies=nested,
             like_count=int(like_count or 0),
             is_anonymous=bool(comment.is_anonymous),
             edited_at=self._convert_timestamp(comment.updated_at),
+            reply_count=int(getattr(comment, "reply_count", 0) or len(nested)),
+            report_count=int(getattr(comment, "report_count", 0) or 0),
         )
 
     def _convert_to_proto_post(
@@ -139,6 +156,10 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             pinned_at=self._convert_timestamp(post.pinned_at),
             share_count=int(post.share_count or 0),
             view_count=int(post.view_count or 0),
+            allow_comments=bool(getattr(post, "allow_comments", True)),
+            allow_share=bool(getattr(post, "allow_share", True)),
+            allow_reactions=bool(getattr(post, "allow_reactions", True)),
+            report_count=int(getattr(post, "report_count", 0) or 0),
         )
 
     def CreatePost(self, request, context):
@@ -878,6 +899,10 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
             status=report.status or "PENDING",
             priority=report.priority or "MEDIUM",
             created_at=self._convert_timestamp(report.created_at),
+            reviewed_by=uuid_str(report.reviewed_by),
+            reviewed_at=self._convert_timestamp(report.reviewed_at),
+            action_taken=report.action_taken or "",
+            action_note=report.action_note or "",
         )
 
     def _create_report(self, context, entity_type, entity_id, reported_by, reported_user_id, reason_code, description):
@@ -953,6 +978,123 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 page=page,
                 total_pages=total_pages,
             )
+
+    def GetReport(self, request, context):
+        report_id = parse_uuid(request.report_id)
+        if not report_id:
+            return post_pb2.ReportResponse(success=False, message="report_id is required")
+        with self._session() as (_, repo):
+            report = repo.get_report(report_id)
+            if not report:
+                return post_pb2.ReportResponse(success=False, message="Report not found")
+            return post_pb2.ReportResponse(
+                success=True,
+                message="Report retrieved",
+                report=self._convert_to_proto_report(report),
+            )
+
+    def GetReports(self, request, context):
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            reports, total = repo.get_reports(
+                status=request.status or None,
+                entity_type=request.entity_type or None,
+                priority=request.priority or None,
+                reported_by=parse_uuid(request.reported_by),
+                reported_user_id=parse_uuid(request.reported_user_id),
+                entity_id=parse_uuid(request.entity_id),
+                page=page,
+                limit=limit,
+            )
+            total_pages = max(1, (total + limit - 1) // limit)
+            return post_pb2.ReportListResponse(
+                success=True,
+                message="Reports retrieved",
+                reports=[self._convert_to_proto_report(r) for r in reports],
+                total_count=total,
+                page=page,
+                total_pages=total_pages,
+            )
+
+    def UpdateReportStatus(self, request, context):
+        report_id = parse_uuid(request.report_id)
+        if not report_id or not (request.status or "").strip():
+            return post_pb2.ReportResponse(success=False, message="report_id and status are required")
+        with self._session() as (_, repo):
+            try:
+                report = repo.update_report_status(
+                    report_id=report_id,
+                    status=request.status,
+                    reviewed_by=parse_uuid(request.reviewed_by),
+                    action_taken=request.action_taken or None,
+                    action_note=request.action_note or None,
+                    priority=request.priority or None,
+                )
+                if not report:
+                    return post_pb2.ReportResponse(success=False, message="Report not found")
+                return post_pb2.ReportResponse(
+                    success=True,
+                    message="Report updated",
+                    report=self._convert_to_proto_report(report),
+                )
+            except Exception as e:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                return post_pb2.ReportResponse(success=False, message=str(e))
+
+    def AssignReport(self, request, context):
+        report_id = parse_uuid(request.report_id)
+        reviewer = parse_uuid(request.reviewed_by)
+        if not report_id or not reviewer:
+            return post_pb2.ReportResponse(success=False, message="report_id and reviewed_by are required")
+        with self._session() as (_, repo):
+            report = repo.assign_report(report_id, reviewer)
+            if not report:
+                return post_pb2.ReportResponse(success=False, message="Report not found")
+            return post_pb2.ReportResponse(
+                success=True,
+                message="Report assigned",
+                report=self._convert_to_proto_report(report),
+            )
+
+    def GetReportsByEntity(self, request, context):
+        entity_id = parse_uuid(request.entity_id)
+        entity_type = (request.entity_type or "").strip().upper()
+        if not entity_id or not entity_type:
+            return post_pb2.ReportListResponse(success=False, message="entity_type and entity_id are required")
+        page = max(1, request.page or 1)
+        limit = max(1, min(100, request.limit or 20))
+        with self._session() as (_, repo):
+            reports, total = repo.get_reports(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                page=page,
+                limit=limit,
+            )
+            total_pages = max(1, (total + limit - 1) // limit)
+            return post_pb2.ReportListResponse(
+                success=True,
+                message="Reports retrieved",
+                reports=[self._convert_to_proto_report(r) for r in reports],
+                total_count=total,
+                page=page,
+                total_pages=total_pages,
+            )
+
+    def GetReportStats(self, request, context):
+        with self._session() as (_, repo):
+            stats = repo.get_report_stats()
+            return post_pb2.ReportStatsResponse(success=True, message="OK", **stats)
+
+    def DeleteReport(self, request, context):
+        report_id = parse_uuid(request.report_id)
+        if not report_id:
+            return post_pb2.GenericResponse(success=False, message="report_id is required")
+        with self._session() as (_, repo):
+            ok = repo.delete_report(report_id)
+            if not ok:
+                return post_pb2.GenericResponse(success=False, message="Report not found")
+            return post_pb2.GenericResponse(success=True, message="Report deleted")
 
 
 def serve():

@@ -34,6 +34,10 @@ message Post {
     int64 pinned_at = 29;
     int32 share_count = 30;
     int64 view_count = 31;
+    bool allow_comments = 32;
+    bool allow_share = 33;
+    bool allow_reactions = 34;
+    int32 report_count = 35;
 }
 
 // Post Media Message
@@ -65,6 +69,8 @@ message Comment {
     int32 like_count = 13;
     bool is_anonymous = 14;
     int64 edited_at = 15;
+    int32 reply_count = 16;
+    int32 report_count = 17;
 }
 
 // Post Like User (for GetPostLikes)
@@ -103,6 +109,10 @@ message Report {
     string status = 9;
     string priority = 10;
     int64 created_at = 11;
+    string reviewed_by = 12;
+    int64 reviewed_at = 13;
+    string action_taken = 14;
+    string action_note = 15;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +344,58 @@ message GetMyReportsRequest {
     int32 limit = 3;
 }
 
+message GetReportRequest {
+    string report_id = 1;
+}
+
+message GetReportsRequest {
+    string status = 1;
+    string entity_type = 2;
+    string priority = 3;
+    string reported_by = 4;
+    string reported_user_id = 5;
+    string entity_id = 6;
+    int32 page = 7;
+    int32 limit = 8;
+}
+
+message UpdateReportStatusRequest {
+    string report_id = 1;
+    string status = 2;
+    string reviewed_by = 3;
+    string action_taken = 4;
+    string action_note = 5;
+    string priority = 6;
+}
+
+message AssignReportRequest {
+    string report_id = 1;
+    string reviewed_by = 2;
+}
+
+message GetReportsByEntityRequest {
+    string entity_type = 1;
+    string entity_id = 2;
+    int32 page = 3;
+    int32 limit = 4;
+}
+
+message ReportStatsRequest {
+    // optional filters reserved for future (e.g. date range)
+    string status = 1;
+}
+
+message ReportStatsResponse {
+    bool success = 1;
+    string message = 2;
+    int32 pending_count = 3;
+    int32 under_review_count = 4;
+    int32 resolved_count = 5;
+    int32 rejected_count = 6;
+    int32 high_priority_count = 7;
+    int32 total_count = 8;
+}
+
 // ---------------------------------------------------------------------------
 // Responses
 // ---------------------------------------------------------------------------
@@ -473,4 +535,11 @@ service PostsService {
     rpc ReportProperty(ReportPropertyRequest) returns (ReportResponse) {}
     rpc ReportUser(ReportUserRequest) returns (ReportResponse) {}
     rpc GetMyReports(GetMyReportsRequest) returns (ReportListResponse) {}
+    rpc GetReport(GetReportRequest) returns (ReportResponse) {}
+    rpc GetReports(GetReportsRequest) returns (ReportListResponse) {}
+    rpc UpdateReportStatus(UpdateReportStatusRequest) returns (ReportResponse) {}
+    rpc AssignReport(AssignReportRequest) returns (ReportResponse) {}
+    rpc GetReportsByEntity(GetReportsByEntityRequest) returns (ReportListResponse) {}
+    rpc GetReportStats(ReportStatsRequest) returns (ReportStatsResponse) {}
+    rpc DeleteReport(GetReportRequest) returns (GenericResponse) {}
 }
