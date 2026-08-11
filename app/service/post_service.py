@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from ..proto_files import post_pb2, post_pb2_grpc
 from ..repository.post_repository import PostRepository
 from ..utils.db_connection import get_db_engine
-from ..utils.schema_helpers import parse_uuid, uuid_str
+from ..utils.schema_helpers import parse_uuid, uuid_str, normalize_media_type
 from ..utils.s3_utils import build_post_key, upload_file_to_s3
 from ..interceptors.auth_interceptor import AuthServerInterceptor
 from sqlalchemy.orm import sessionmaker
@@ -61,18 +61,24 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
 
         nested = []
         if include_replies:
-            active_replies = [
-                r
-                for r in (comment.replies or [])
-                if getattr(r, "deleted_at", None) is None
-                and (getattr(r, "status", None) or "ACTIVE") == "ACTIVE"
-            ]
-            active_replies.sort(key=lambda r: getattr(r, "created_at", None) or 0)
-            # One-level threads only
-            nested = [
-                self._convert_to_proto_comment(r, repository, include_replies=False)
-                for r in active_replies
-            ]
+            thread = getattr(comment, "_thread_replies", None)
+            if thread is not None:
+                nested = [
+                    self._convert_to_proto_comment(r, repository, include_replies=True)
+                    for r in thread
+                ]
+            else:
+                active_replies = [
+                    r
+                    for r in (comment.replies or [])
+                    if getattr(r, "deleted_at", None) is None
+                    and (getattr(r, "status", None) or "ACTIVE") == "ACTIVE"
+                ]
+                active_replies.sort(key=lambda r: getattr(r, "created_at", None) or 0)
+                nested = [
+                    self._convert_to_proto_comment(r, repository, include_replies=True)
+                    for r in active_replies
+                ]
 
         return post_pb2.Comment(
             id=uuid_str(comment.id),
@@ -197,8 +203,9 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                         db.rollback()
                         return post_pb2.PostResponse(success=False, message="file_path is required for media upload")
 
-                    inferred_type = media.media_type or (
-                        "video" if (content_type or "").startswith("video/") else "image"
+                    inferred_type = normalize_media_type(
+                        media.media_type,
+                        content_type=content_type,
                     )
                     media_id = repo.add_post_media(
                         post_id=post.id,
@@ -411,7 +418,10 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                     media_id = repo.add_post_media(
                         post_id=post.id,
                         uploaded_by=uploader,
-                        media_type=media.media_type or "image",
+                        media_type=normalize_media_type(
+                            media.media_type,
+                            content_type=content_type,
+                        ),
                         file_url="",
                         display_order=media.media_order or 1,
                         file_name=getattr(media, "file_name", None),

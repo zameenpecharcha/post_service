@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ..entity.comment_entity import Comment
 from ..entity.media_entity import media as MediaTable
@@ -656,15 +656,41 @@ class PostRepository:
 
     def get_comments(self, post_id: UUID, page: int = 1, limit: int = 10) -> Tuple[List[Comment], int]:
         try:
-            query = (
+            # Load every active comment for the post, then build a full reply tree.
+            # (joinedload only loads one level — nested replies otherwise disappear.)
+            all_comments = (
                 self._active_comments()
-                .options(joinedload(Comment.replies))
-                .filter(Comment.post_id == post_id, Comment.parent_comment_id.is_(None))
-                .order_by(desc(Comment.created_at))
+                .filter(Comment.post_id == post_id)
+                .order_by(Comment.created_at.asc())
+                .all()
             )
-            total = query.count()
-            comments = query.offset((page - 1) * limit).limit(limit).all()
-            return comments, total
+
+            children_map: dict = {}
+            roots: List[Comment] = []
+            for comment in all_comments:
+                parent_id = comment.parent_comment_id
+                if parent_id:
+                    children_map.setdefault(parent_id, []).append(comment)
+                else:
+                    roots.append(comment)
+
+            roots.sort(key=lambda c: c.created_at or 0, reverse=True)
+            total = len(roots)
+            page_roots = roots[(page - 1) * limit : (page - 1) * limit + limit]
+
+            def attach_thread(node: Comment) -> None:
+                kids = sorted(
+                    children_map.get(node.id, []),
+                    key=lambda c: c.created_at or 0,
+                )
+                object.__setattr__(node, "_thread_replies", kids)
+                for kid in kids:
+                    attach_thread(kid)
+
+            for root in page_roots:
+                attach_thread(root)
+
+            return page_roots, total
         except SQLAlchemyError as e:
             raise Exception(f"Database error while getting comments: {e}") from e
 
