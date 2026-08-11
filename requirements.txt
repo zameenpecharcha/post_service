@@ -1,9 +1,9 @@
 SQLAlchemy
 python-dotenv
 psycopg2-binary
-grpcio>=1.83.0
+grpcio==1.83.0
 protobuf>=7.35.1
-grpcio-tools>=1.83.0
+grpcio-tools==1.83.0
 pydantic
 boto3
 botocore 
