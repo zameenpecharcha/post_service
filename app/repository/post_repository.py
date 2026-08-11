@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..entity.comment_entity import Comment
 from ..entity.media_entity import media as MediaTable
@@ -658,6 +658,7 @@ class PostRepository:
         try:
             query = (
                 self._active_comments()
+                .options(joinedload(Comment.replies))
                 .filter(Comment.post_id == post_id, Comment.parent_comment_id.is_(None))
                 .order_by(desc(Comment.created_at))
             )
@@ -886,3 +887,102 @@ class PostRepository:
         total = query.count()
         reports = query.offset((page - 1) * limit).limit(limit).all()
         return reports, total
+
+    def get_report(self, report_id: UUID) -> Optional[Report]:
+        return self.db.query(Report).filter(Report.id == report_id).first()
+
+    def get_reports(
+        self,
+        status: str = None,
+        entity_type: str = None,
+        priority: str = None,
+        reported_by: UUID = None,
+        reported_user_id: UUID = None,
+        entity_id: UUID = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> Tuple[List[Report], int]:
+        query = self.db.query(Report)
+        if status and str(status).strip():
+            query = query.filter(Report.status == str(status).strip().upper())
+        if entity_type and str(entity_type).strip():
+            query = query.filter(Report.entity_type == str(entity_type).strip().upper())
+        if priority and str(priority).strip():
+            query = query.filter(Report.priority == str(priority).strip().upper())
+        if reported_by:
+            query = query.filter(Report.reported_by == reported_by)
+        if reported_user_id:
+            query = query.filter(Report.reported_user_id == reported_user_id)
+        if entity_id:
+            query = query.filter(Report.entity_id == entity_id)
+        query = query.order_by(desc(Report.created_at))
+        total = query.count()
+        reports = query.offset((page - 1) * limit).limit(limit).all()
+        return reports, total
+
+    def update_report_status(
+        self,
+        report_id: UUID,
+        status: str,
+        reviewed_by: UUID = None,
+        action_taken: str = None,
+        action_note: str = None,
+        priority: str = None,
+    ) -> Optional[Report]:
+        report = self.get_report(report_id)
+        if not report:
+            return None
+        now = utcnow()
+        report.status = str(status).strip().upper()
+        if reviewed_by:
+            report.reviewed_by = reviewed_by
+        if action_taken is not None:
+            report.action_taken = action_taken
+        if action_note is not None:
+            report.action_note = action_note
+        if priority:
+            report.priority = str(priority).strip().upper()
+        report.reviewed_at = now
+        report.updated_at = now
+        self.db.commit()
+        self.db.refresh(report)
+        return report
+
+    def assign_report(self, report_id: UUID, reviewed_by: UUID) -> Optional[Report]:
+        report = self.get_report(report_id)
+        if not report:
+            return None
+        now = utcnow()
+        report.reviewed_by = reviewed_by
+        if (report.status or "").upper() == "PENDING":
+            report.status = "UNDER_REVIEW"
+        report.updated_at = now
+        self.db.commit()
+        self.db.refresh(report)
+        return report
+
+    def get_report_stats(self) -> dict:
+        def _count(status: str = None, priority: str = None) -> int:
+            q = self.db.query(func.count(Report.id))
+            if status:
+                q = q.filter(Report.status == status)
+            if priority:
+                q = q.filter(Report.priority == priority)
+            return int(q.scalar() or 0)
+
+        return {
+            "pending_count": _count("PENDING"),
+            "under_review_count": _count("UNDER_REVIEW"),
+            "resolved_count": _count("RESOLVED"),
+            "rejected_count": _count("REJECTED"),
+            "high_priority_count": _count(priority="HIGH"),
+            "total_count": _count(),
+        }
+
+    def delete_report(self, report_id: UUID) -> bool:
+        report = self.get_report(report_id)
+        if not report:
+            return False
+        self.db.delete(report)
+        self.db.commit()
+        return True
