@@ -23,6 +23,7 @@ from ..utils.schema_helpers import (
     normalize_visibility,
     utcnow,
 )
+from ..utils.kafka_producer import publish_post_event, publish_comment_event
 
 
 class PostRepository:
@@ -79,6 +80,10 @@ class PostRepository:
             if commit:
                 self.db.commit()
                 self.db.refresh(post)
+                try:
+                    publish_post_event("POST_CREATED", post)
+                except Exception as pe:
+                    pass
             else:
                 self.db.flush()
             return post
@@ -144,6 +149,10 @@ class PostRepository:
             self.db.add(post)
             self.db.commit()
             self.db.refresh(post)
+            try:
+                publish_post_event("POST_UPDATED", post)
+            except Exception as pe:
+                pass
             return post
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -170,6 +179,10 @@ class PostRepository:
                 .values(status="DELETED", updated_at=now)
             )
             self.db.commit()
+            try:
+                publish_post_event("POST_DELETED", post)
+            except Exception as pe:
+                pass
             return True
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -336,6 +349,10 @@ class PostRepository:
         post.updated_at = utcnow()
         self.db.commit()
         self.db.refresh(post)
+        try:
+            publish_post_event("POST_UPDATED", post)
+        except Exception as pe:
+            pass
         return post
 
     def restore_archived_post(self, post_id: UUID, user_id: UUID) -> Optional[Post]:
@@ -346,6 +363,10 @@ class PostRepository:
         post.updated_at = utcnow()
         self.db.commit()
         self.db.refresh(post)
+        try:
+            publish_post_event("POST_UPDATED", post)
+        except Exception as pe:
+            pass
         return post
 
     def get_trending_posts(self, limit: int = 10) -> List[Post]:
@@ -601,6 +622,11 @@ class PostRepository:
 
             self.db.commit()
             self.db.refresh(comment)
+            try:
+                prop_id = getattr(post, "property_id", None) if 'post' in locals() and post else None
+                publish_comment_event("COMMENT_CREATED", comment, property_id=prop_id)
+            except Exception as pe:
+                pass
             return comment
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -629,6 +655,12 @@ class PostRepository:
         comment.updated_at = utcnow()
         self.db.commit()
         self.db.refresh(comment)
+        try:
+            post = self.db.query(Post).filter(Post.id == comment.post_id).first() if getattr(comment, "post_id", None) else None
+            prop_id = getattr(post, "property_id", None) if post else None
+            publish_comment_event("COMMENT_UPDATED", comment, property_id=prop_id)
+        except Exception as pe:
+            pass
         return comment
 
     def delete_comment(self, comment_id: UUID) -> bool:
@@ -652,6 +684,11 @@ class PostRepository:
             post.updated_at = now
 
         self.db.commit()
+        try:
+            prop_id = getattr(post, "property_id", None) if 'post' in locals() and post else None
+            publish_comment_event("COMMENT_DELETED", comment, property_id=prop_id)
+        except Exception as pe:
+            pass
         return True
 
     def get_comments(self, post_id: UUID, page: int = 1, limit: int = 10) -> Tuple[List[Comment], int]:

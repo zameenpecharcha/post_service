@@ -13,3 +13,4 @@ PyJWT[crypto]
 cryptography
 grpcio-reflection
 grpcio-health-checking
+kafka-python-ng
