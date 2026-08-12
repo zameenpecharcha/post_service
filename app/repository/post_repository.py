@@ -272,7 +272,7 @@ class PostRepository:
 
             total = query_obj.count()
             posts = (
-                query_obj.order_by(desc(Post.is_pinned), desc(Post.created_at))
+                query_obj.order_by(desc(Post.created_at))
                 .offset((page - 1) * limit)
                 .limit(limit)
                 .all()
