@@ -16,6 +16,8 @@ COMMENT_STATUSES = frozenset({"ACTIVE", "DELETED", "HIDDEN"})
 POST_REACTIONS = frozenset({"LIKE", "LOVE", "WOW", "HAHA", "SAD", "ANGRY"})
 COMMENT_REACTIONS = frozenset({"LIKE", "LOVE", "WOW", "HAHA"})
 SHARE_TYPES = frozenset({"REPOST", "SHARE"})
+# api_gateway.media.media_type_valid allows only these values
+MEDIA_TYPES = frozenset({"IMAGE", "VIDEO", "DOCUMENT"})
 REPORT_REASON_CODES = frozenset({
     "SPAM", "FAKE_PROPERTY", "ABUSIVE_LANGUAGE", "MISLEADING_INFORMATION",
     "HARASSMENT", "INAPPROPRIATE_CONTENT", "SCAM", "COPYRIGHT", "OTHER",
@@ -62,6 +64,28 @@ def _normalize(value: Optional[str], default: str, allowed: frozenset, legacy: O
 
 def normalize_post_type(value: Optional[str]) -> str:
     return _normalize(value, "TEXT", POST_TYPES)
+
+
+def normalize_media_type(value: Optional[str] = None, *, content_type: Optional[str] = None) -> str:
+    """Map client/mime values to api_gateway.media check constraint (IMAGE|VIDEO|DOCUMENT)."""
+    raw = (value or "").strip().upper()
+    ct = (content_type or "").strip().lower()
+    if not raw:
+        if ct.startswith("video/"):
+            raw = "VIDEO"
+        elif ct.startswith("image/"):
+            raw = "IMAGE"
+        elif ct:
+            raw = "DOCUMENT"
+        else:
+            raw = "IMAGE"
+    if raw in ("IMG", "PHOTO", "PICTURE", "JPEG", "JPG", "PNG", "GIF", "WEBP"):
+        raw = "IMAGE"
+    if raw in ("VID", "MOVIE", "MP4"):
+        raw = "VIDEO"
+    if raw in ("DOC", "FILE", "PDF", "ATTACHMENT"):
+        raw = "DOCUMENT"
+    return raw if raw in MEDIA_TYPES else "IMAGE"
 
 
 def normalize_visibility(value: Optional[str]) -> str:
