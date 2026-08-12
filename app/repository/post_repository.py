@@ -39,6 +39,46 @@ class PostRepository:
             Comment.status == "ACTIVE",
         )
 
+    def _row_mapping(self, row) -> dict:
+        return dict(row._mapping) if hasattr(row, "_mapping") else {}
+
+    def _post_thumbnail_url(self, post_id: UUID) -> str:
+        rows = self.get_post_media(post_id)
+        if not rows:
+            return ""
+        for row in rows:
+            media = self._row_mapping(row)
+            if media.get("thumbnail_url"):
+                return media["thumbnail_url"]
+        first = self._row_mapping(rows[0])
+        return first.get("thumbnail_url") or first.get("file_url") or ""
+
+    def _publish_post_event(self, event_type: str, post: Post) -> None:
+        if not post:
+            return
+        try:
+            publish_post_event(event_type, post, thumbnail_url=self._post_thumbnail_url(post.id))
+        except Exception:
+            pass
+
+    def _comment_property_id(self, comment: Comment) -> Optional[str]:
+        if not comment or not getattr(comment, "post_id", None):
+            return None
+        post = self.db.query(Post).filter(Post.id == comment.post_id).first()
+        return str(post.property_id) if post and post.property_id else None
+
+    def _publish_comment_event(self, event_type: str, comment: Comment) -> None:
+        if not comment:
+            return
+        try:
+            publish_comment_event(
+                event_type,
+                comment,
+                property_id=self._comment_property_id(comment),
+            )
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------ posts
     def create_post(
         self,
@@ -80,10 +120,7 @@ class PostRepository:
             if commit:
                 self.db.commit()
                 self.db.refresh(post)
-                try:
-                    publish_post_event("POST_CREATED", post)
-                except Exception as pe:
-                    pass
+                self._publish_post_event("POST_CREATED", post)
             else:
                 self.db.flush()
             return post
@@ -149,10 +186,7 @@ class PostRepository:
             self.db.add(post)
             self.db.commit()
             self.db.refresh(post)
-            try:
-                publish_post_event("POST_UPDATED", post)
-            except Exception as pe:
-                pass
+            self._publish_post_event("POST_UPDATED", post)
             return post
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -179,10 +213,7 @@ class PostRepository:
                 .values(status="DELETED", updated_at=now)
             )
             self.db.commit()
-            try:
-                publish_post_event("POST_DELETED", post)
-            except Exception as pe:
-                pass
+            self._publish_post_event("POST_DELETED", post)
             return True
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -349,10 +380,7 @@ class PostRepository:
         post.updated_at = utcnow()
         self.db.commit()
         self.db.refresh(post)
-        try:
-            publish_post_event("POST_UPDATED", post)
-        except Exception as pe:
-            pass
+        self._publish_post_event("POST_UPDATED", post)
         return post
 
     def restore_archived_post(self, post_id: UUID, user_id: UUID) -> Optional[Post]:
@@ -363,10 +391,7 @@ class PostRepository:
         post.updated_at = utcnow()
         self.db.commit()
         self.db.refresh(post)
-        try:
-            publish_post_event("POST_UPDATED", post)
-        except Exception as pe:
-            pass
+        self._publish_post_event("POST_UPDATED", post)
         return post
 
     def get_trending_posts(self, limit: int = 10) -> List[Post]:
@@ -430,6 +455,9 @@ class PostRepository:
                 self.db.commit()
             else:
                 self.db.flush()
+            post = self.get_post(post_id)
+            if post:
+                self._publish_post_event("POST_UPDATED", post)
             return result.scalar()
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -437,6 +465,10 @@ class PostRepository:
 
     def delete_post_media(self, media_id: UUID) -> bool:
         try:
+            media_row = self.db.execute(
+                select(MediaTable).where(MediaTable.c.id == media_id)
+            ).fetchone()
+            post_id = self._row_mapping(media_row).get("entity_id") if media_row else None
             now = utcnow()
             result = self.db.execute(
                 update(MediaTable)
@@ -444,6 +476,10 @@ class PostRepository:
                 .values(status="DELETED", updated_at=now)
             )
             self.db.commit()
+            if result.rowcount > 0 and post_id:
+                post = self.db.query(Post).filter(Post.id == post_id).first()
+                if post:
+                    self._publish_post_event("POST_UPDATED", post)
             return result.rowcount > 0
         except SQLAlchemyError:
             self.db.rollback()
@@ -622,11 +658,7 @@ class PostRepository:
 
             self.db.commit()
             self.db.refresh(comment)
-            try:
-                prop_id = getattr(post, "property_id", None) if 'post' in locals() and post else None
-                publish_comment_event("COMMENT_CREATED", comment, property_id=prop_id)
-            except Exception as pe:
-                pass
+            self._publish_comment_event("COMMENT_CREATED", comment)
             return comment
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -655,12 +687,7 @@ class PostRepository:
         comment.updated_at = utcnow()
         self.db.commit()
         self.db.refresh(comment)
-        try:
-            post = self.db.query(Post).filter(Post.id == comment.post_id).first() if getattr(comment, "post_id", None) else None
-            prop_id = getattr(post, "property_id", None) if post else None
-            publish_comment_event("COMMENT_UPDATED", comment, property_id=prop_id)
-        except Exception as pe:
-            pass
+        self._publish_comment_event("COMMENT_UPDATED", comment)
         return comment
 
     def delete_comment(self, comment_id: UUID) -> bool:
@@ -684,11 +711,7 @@ class PostRepository:
             post.updated_at = now
 
         self.db.commit()
-        try:
-            prop_id = getattr(post, "property_id", None) if 'post' in locals() and post else None
-            publish_comment_event("COMMENT_DELETED", comment, property_id=prop_id)
-        except Exception as pe:
-            pass
+        self._publish_comment_event("COMMENT_DELETED", comment)
         return True
 
     def get_comments(self, post_id: UUID, page: int = 1, limit: int = 10) -> Tuple[List[Comment], int]:
