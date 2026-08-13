@@ -144,6 +144,7 @@ def publish_comment_event(event_type: str, comment, property_id: str = None, cor
         comm_code_str = getattr(comment, "comment_code", None) or f"COMM-{comm_id_str}"
         post_id_str = str(comment.post_id) if getattr(comment, "post_id", None) else ""
 
+        parent_id = getattr(comment, "parent_comment_id", None)
         payload = {
             "id": comm_id_str,
             "commentId": comm_code_str,
@@ -151,6 +152,8 @@ def publish_comment_event(event_type: str, comment, property_id: str = None, cor
             "propertyId": str(property_id) if property_id else "",
             "content": getattr(comment, "content", "") or "",
             "status": getattr(comment, "status", "ACTIVE") or "ACTIVE",
+            "userId": str(getattr(comment, "user_id", "") or ""),
+            "parentCommentId": str(parent_id) if parent_id else None,
         }
 
         event = {
@@ -169,4 +172,43 @@ def publish_comment_event(event_type: str, comment, property_id: str = None, cor
         return True
     except Exception as e:
         log_msg("error", f"Error publishing {event_type} event for comment_id={getattr(comment, 'id', None)}: {str(e)}")
+        return False
+
+
+def publish_analytics_event(
+    event_type: str,
+    payload: dict,
+    key: str = None,
+    topic: str = None,
+    source: str = "post-service",
+    correlation_id: str = None,
+):
+    """Publish ClickHouse activity events to the given Kafka topic."""
+    try:
+        producer = get_kafka_producer()
+        if not producer:
+            log_msg("warning", f"KafkaProducer unavailable. Analytics event {event_type} not sent.")
+            return False
+
+        resolved_topic = topic or os.getenv("KAFKA_POST_EVENTS_TOPIC", "post-events")
+        event_id = str(uuid.uuid4())
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        event_key = key or str((payload or {}).get("userId") or event_id)
+
+        event = {
+            "eventId": event_id,
+            "eventType": event_type,
+            "eventVersion": "1.0",
+            "occurredAt": now_iso,
+            "source": source,
+            "correlationId": correlation_id or event_id,
+            "payload": payload or {},
+        }
+
+        producer.send(resolved_topic, key=event_key, value=event)
+        producer.flush(timeout=5)
+        log_msg("info", f"Successfully published analytics event {event_type} (eventId={event_id}) to topic {resolved_topic}")
+        return True
+    except Exception as e:
+        log_msg("error", f"Error publishing analytics event {event_type}: {str(e)}")
         return False
