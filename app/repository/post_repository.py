@@ -57,11 +57,16 @@ class PostRepository:
 
     def _publish_post_event(self, event_type: str, post: Post) -> None:
         if not post:
+            log_msg("warning", f"Skip {event_type}: post is missing")
             return
         try:
-            publish_post_event(event_type, post, thumbnail_url=self._post_thumbnail_url(post.id))
-        except Exception:
-            pass
+            sent = publish_post_event(event_type, post, thumbnail_url=self._post_thumbnail_url(post.id))
+            if sent:
+                log_msg("info", f"Triggered {event_type} for post_id={post.id}")
+            else:
+                log_msg("error", f"{event_type} was not sent to Kafka for post_id={post.id}")
+        except Exception as exc:
+            log_msg("error", f"Failed to publish {event_type} for post_id={getattr(post, 'id', None)}: {exc}")
 
     def _comment_property_id(self, comment: Comment) -> Optional[str]:
         if not comment or not getattr(comment, "post_id", None):
@@ -71,15 +76,20 @@ class PostRepository:
 
     def _publish_comment_event(self, event_type: str, comment: Comment) -> None:
         if not comment:
+            log_msg("warning", f"Skip {event_type}: comment is missing")
             return
         try:
-            publish_comment_event(
+            sent = publish_comment_event(
                 event_type,
                 comment,
                 property_id=self._comment_property_id(comment),
             )
-        except Exception:
-            pass
+            if sent:
+                log_msg("info", f"Triggered {event_type} for comment_id={comment.id}")
+            else:
+                log_msg("error", f"{event_type} was not sent to Kafka for comment_id={comment.id}")
+        except Exception as exc:
+            log_msg("error", f"Failed to publish {event_type} for comment_id={getattr(comment, 'id', None)}: {exc}")
 
     def _post_analytics_payload(self, post: Post, user_id: UUID = None, view_duration: int = 0) -> dict:
         location = getattr(post, "location", None) or ""
@@ -109,27 +119,37 @@ class PostRepository:
 
     def _publish_post_analytics(self, event_type: str, post: Post, user_id: UUID = None, view_duration: int = 0) -> None:
         if not post:
+            log_msg("warning", f"Skip {event_type}: post is missing")
             return
         try:
-            publish_analytics_event(
+            sent = publish_analytics_event(
                 event_type,
                 self._post_analytics_payload(post, user_id, view_duration),
                 key=str(post.id),
                 topic=os.getenv("KAFKA_POST_EVENTS_TOPIC", "post-events"),
             )
+            if sent:
+                log_msg("info", f"Triggered {event_type} analytics for post_id={post.id} user_id={user_id}")
+            else:
+                log_msg("error", f"{event_type} analytics was not sent to Kafka for post_id={post.id}")
         except Exception as exc:
             log_msg("error", f"Failed to publish post analytics {event_type}: {exc}")
 
     def _publish_comment_analytics(self, event_type: str, comment: Comment, user_id: UUID = None) -> None:
         if not comment:
+            log_msg("warning", f"Skip {event_type}: comment is missing")
             return
         try:
-            publish_analytics_event(
+            sent = publish_analytics_event(
                 event_type,
                 self._comment_analytics_payload(comment, user_id),
                 key=str(comment.id),
                 topic=os.getenv("KAFKA_COMMENTS_EVENTS_TOPIC", "comments-events"),
             )
+            if sent:
+                log_msg("info", f"Triggered {event_type} analytics for comment_id={comment.id} user_id={user_id}")
+            else:
+                log_msg("error", f"{event_type} analytics was not sent to Kafka for comment_id={comment.id}")
         except Exception as exc:
             log_msg("error", f"Failed to publish comment analytics {event_type}: {exc}")
 
@@ -662,15 +682,18 @@ class PostRepository:
                     post.like_count = (post.like_count or 0) + 1
                     post.updated_at = utcnow()
                     self.db.commit()
+                    log_msg("info", f"like_post saved, publishing POST_LIKED post_id={post_id} user_id={user_id}")
                     self._publish_post_analytics("POST_LIKED", post, user_id=user_id)
                 except IntegrityError:
                     self.db.rollback()
+                    log_msg("warning", f"like_post skipped, like already exists post_id={post_id} user_id={user_id}")
                 except SQLAlchemyError as e:
                     self.db.rollback()
                     raise Exception(f"Database error while adding like: {e}") from e
             elif reaction_type:
                 existing_like.reaction_type = normalize_post_reaction(reaction_type)
                 self.db.commit()
+                log_msg("info", f"like_post already liked, no POST_LIKED event post_id={post_id} user_id={user_id}")
 
             self.db.refresh(post)
             return post
@@ -749,7 +772,9 @@ class PostRepository:
 
             self.db.commit()
             self.db.refresh(comment)
+            log_msg("info", f"create_comment saved, publishing COMMENT_CREATED comment_id={comment.id} post_id={post_id}")
             self._publish_comment_event("COMMENT_CREATED", comment)
+            self._publish_comment_analytics("COMMENT_CREATED", comment, user_id=user_id)
             self._publish_post_analytics("POST_COMMENTED", post, user_id=user_id)
             return comment
         except SQLAlchemyError as e:
