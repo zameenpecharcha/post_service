@@ -25,6 +25,7 @@ from ..utils.schema_helpers import (
     utcnow,
 )
 from ..utils.kafka_producer import publish_analytics_event, publish_comment_event, publish_post_event
+from ..utils.log_utils import log_msg
 
 
 class PostRepository:
@@ -116,8 +117,8 @@ class PostRepository:
                 key=str(post.id),
                 topic=os.getenv("KAFKA_POST_EVENTS_TOPIC", "post-events"),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_msg("error", f"Failed to publish post analytics {event_type}: {exc}")
 
     def _publish_comment_analytics(self, event_type: str, comment: Comment, user_id: UUID = None) -> None:
         if not comment:
@@ -127,10 +128,10 @@ class PostRepository:
                 event_type,
                 self._comment_analytics_payload(comment, user_id),
                 key=str(comment.id),
-                topic=os.getenv("KAFKA_COMMENTS_EVENTS_TOPIC", "comments_events"),
+                topic=os.getenv("KAFKA_COMMENTS_EVENTS_TOPIC", "comments-events"),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log_msg("error", f"Failed to publish comment analytics {event_type}: {exc}")
 
     def _publish_property_analytics(self, event_type: str, property_id: UUID, user_id: UUID = None) -> None:
         if not property_id:
@@ -153,8 +154,8 @@ class PostRepository:
                 key=str(property_id),
                 topic=os.getenv("KAFKA_PROPERTY_EVENTS_TOPIC", "property-events"),
             )
-        except Exception:
-            pass
+        except Exception as orig_exc:
+            log_msg("error", f"Failed to publish property analytics {event_type}: {orig_exc}")
 
     # ------------------------------------------------------------------ posts
     def create_post(

@@ -64,7 +64,7 @@ def test_publish_comment_created_event():
         topic = args[0]
         event = kwargs["value"]
 
-        assert topic == "comments_events"
+        assert topic == "comments-events"
         assert event["eventType"] == "COMMENT_CREATED"
         assert event["source"] == "post-service"
         assert event["payload"]["id"] == "11111111-2222-3333-4444-555555555555"
@@ -112,12 +112,12 @@ def test_publish_comment_created_analytics_event():
             "COMMENT_CREATED",
             payload,
             key="COMM-100001",
-            topic="comments_events",
+            topic="comments-events",
         )
         assert success is True
         args, kwargs = mock_producer.send.call_args
         event = kwargs["value"]
-        assert args[0] == "comments_events"
+        assert args[0] == "comments-events"
         assert event["eventType"] == "COMMENT_CREATED"
         assert event["payload"]["parentCommentId"] is None
         print("[PASSED] test_publish_comment_created_analytics_event")

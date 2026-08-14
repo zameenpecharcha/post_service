@@ -32,18 +32,21 @@ def get_kafka_producer():
 
     bootstrap_servers = os.getenv(
         "KAFKA_BOOTSTRAP_SERVERS",
-        os.getenv("SPRING_KAFKA_BOOTSTRAP_SERVERS", "")
+        os.getenv("SPRING_KAFKA_BOOTSTRAP_SERVERS", "zpc-kafka-zpc-f53a.i.aivencloud.com:27831")
     )
     security_protocol = os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
     sasl_mechanism = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
     jaas_config = os.getenv("KAFKA_SASL_JAAS_CONFIG", "")
 
     jaas_user, jaas_pass = _parse_jaas_config(jaas_config)
-    sasl_username = os.getenv("KAFKA_SASL_USERNAME", jaas_user or "")
+    sasl_username = os.getenv("KAFKA_SASL_USERNAME", jaas_user or "avnadmin")
     sasl_password = os.getenv("KAFKA_SASL_PASSWORD", jaas_pass or "")
 
     if not bootstrap_servers:
         log_msg("error", "KAFKA_BOOTSTRAP_SERVERS is not set. KafkaProducer will not be initialized.")
+        return None
+    if (security_protocol or "").upper() != "PLAINTEXT" and not sasl_password:
+        log_msg("error", "KAFKA_SASL_PASSWORD is not set. KafkaProducer will not be initialized.")
         return None
 
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -127,7 +130,7 @@ def publish_post_event(event_type: str, post, thumbnail_url: str = None, correla
 
 def publish_comment_event(event_type: str, comment, property_id: str = None, correlation_id: str = None):
     """
-    Publish COMMENT_CREATED, COMMENT_UPDATED, or COMMENT_DELETED event to `comments_events` topic.
+    Publish COMMENT_CREATED, COMMENT_UPDATED, or COMMENT_DELETED event to `comments-events` topic.
     """
     try:
         producer = get_kafka_producer()
@@ -135,7 +138,7 @@ def publish_comment_event(event_type: str, comment, property_id: str = None, cor
             log_msg("warning", f"KafkaProducer unavailable. Event {event_type} for comment_id={getattr(comment, 'id', None)} not sent.")
             return False
 
-        topic = os.getenv("KAFKA_COMMENTS_EVENTS_TOPIC", "comments_events")
+        topic = os.getenv("KAFKA_COMMENTS_EVENTS_TOPIC", "comments-events")
         event_id = str(uuid.uuid4())
         corr_id = correlation_id if correlation_id else event_id
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
