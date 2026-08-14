@@ -60,6 +60,35 @@ def _prepare_ssl_cafile(ca_file: str):
     return tmp_path
 
 
+def _build_ssl_context(ca_file: str):
+    prepared = _prepare_ssl_cafile(ca_file)
+    if not prepared:
+        return None
+    ctx = ssl.create_default_context(cafile=prepared)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    try:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    except (AttributeError, ValueError):
+        pass
+    try:
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    except ssl.SSLError:
+        pass
+    return ctx
+
+
+def _reset_producer():
+    global _producer
+    if _producer is None:
+        return
+    try:
+        _producer.close(timeout=1)
+    except Exception:
+        pass
+    _producer = None
+
+
 def get_kafka_producer():
     global _producer
     if _producer is not None:
@@ -68,19 +97,21 @@ def get_kafka_producer():
     bootstrap_servers = os.getenv(
         "KAFKA_BOOTSTRAP_SERVERS",
         os.getenv("SPRING_KAFKA_BOOTSTRAP_SERVERS", "zpc-kafka-zpc-f53a.i.aivencloud.com:27831")
-    )
-    security_protocol = os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
-    sasl_mechanism = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
+    ) or ""
+    for prefix in ("SASL_SSL://", "sasl_ssl://", "SSL://", "ssl://", "PLAINTEXT://"):
+        bootstrap_servers = bootstrap_servers.replace(prefix, "")
+    security_protocol = (os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_SSL") or "SASL_SSL").strip()
+    sasl_mechanism = (os.getenv("KAFKA_SASL_MECHANISM", "PLAIN") or "PLAIN").strip()
     jaas_config = os.getenv("KAFKA_SASL_JAAS_CONFIG", "")
 
     jaas_user, jaas_pass = _parse_jaas_config(jaas_config)
-    sasl_username = os.getenv("KAFKA_SASL_USERNAME", jaas_user or "avnadmin")
-    sasl_password = os.getenv("KAFKA_SASL_PASSWORD", jaas_pass or "")
+    sasl_username = (os.getenv("KAFKA_SASL_USERNAME", jaas_user or "avnadmin") or "avnadmin").strip()
+    sasl_password = (os.getenv("KAFKA_SASL_PASSWORD", jaas_pass or "") or "").strip()
 
     if not bootstrap_servers:
         log_msg("error", "KAFKA_BOOTSTRAP_SERVERS is not set. KafkaProducer will not be initialized.")
         return None
-    if (security_protocol or "").upper() != "PLAINTEXT" and not sasl_password:
+    if security_protocol.upper() != "PLAINTEXT" and not sasl_password:
         log_msg("error", "KAFKA_SASL_PASSWORD is not set. KafkaProducer will not be initialized.")
         return None
 
@@ -92,26 +123,35 @@ def get_kafka_producer():
         "bootstrap_servers": [s.strip() for s in bootstrap_servers.split(",") if s.strip()],
         "value_serializer": lambda v: json.dumps(v).encode("utf-8"),
         "key_serializer": lambda k: k.encode("utf-8") if k else None,
-        "request_timeout_ms": 10000,
+        "client_id": "post-service",
+        "acks": 1,
+        "retries": 3,
+        "retry_backoff_ms": 200,
+        "request_timeout_ms": 20000,
+        "max_block_ms": 15000,
+        # Aiven requires SASL before Kafka APIs. Auto version-probe skips SASL and hangs 60s.
+        "api_version": (2, 5, 0),
+        "connections_max_idle_ms": 180000,
     }
 
-    if security_protocol and security_protocol.upper() != "PLAINTEXT":
+    if security_protocol.upper() != "PLAINTEXT":
         config["security_protocol"] = security_protocol
-        if sasl_mechanism:
-            config["sasl_mechanism"] = sasl_mechanism
-        if sasl_username:
-            config["sasl_plain_username"] = sasl_username
-        if sasl_password:
-            config["sasl_plain_password"] = sasl_password
-        prepared_ca = _prepare_ssl_cafile(ca_file)
-        if prepared_ca:
-            config["ssl_cafile"] = prepared_ca
+        config["sasl_mechanism"] = sasl_mechanism
+        config["sasl_plain_username"] = sasl_username
+        config["sasl_plain_password"] = sasl_password
+        ssl_context = _build_ssl_context(ca_file)
+        if ssl_context:
+            config["ssl_context"] = ssl_context
         else:
             log_msg("error", f"Valid Kafka CA not found at {ca_file}. SASL_SSL producer will fail.")
 
     try:
         _producer = KafkaProducer(**config)
-        log_msg("info", f"KafkaProducer initialized for post_service: {bootstrap_servers}")
+        log_msg(
+            "info",
+            f"KafkaProducer initialized for post_service: {bootstrap_servers} "
+            f"protocol={security_protocol} mechanism={sasl_mechanism} user={sasl_username}",
+        )
     except Exception as e:
         log_msg("error", f"Failed to initialize KafkaProducer in post_service: {str(e)}")
         _producer = None
@@ -157,11 +197,11 @@ def publish_post_event(event_type: str, post, thumbnail_url: str = None, correla
             "payload": payload,
         }
 
-        producer.send(topic, key=post_id_str, value=event)
-        producer.flush(timeout=5)
+        producer.send(topic, key=post_id_str, value=event).get(timeout=15)
         log_msg("info", f"Successfully published event {event_type} (eventId={event_id}) to topic {topic} for post_id={post_id_str}")
         return True
     except Exception as e:
+        _reset_producer()
         log_msg("error", f"Error publishing {event_type} event for post_id={getattr(post, 'id', None)}: {str(e)}")
         return False
 
@@ -207,11 +247,11 @@ def publish_comment_event(event_type: str, comment, property_id: str = None, cor
             "payload": payload,
         }
 
-        producer.send(topic, key=comm_id_str, value=event)
-        producer.flush(timeout=5)
+        producer.send(topic, key=comm_id_str, value=event).get(timeout=15)
         log_msg("info", f"Successfully published event {event_type} (eventId={event_id}) to topic {topic} for comment_id={comm_id_str}")
         return True
     except Exception as e:
+        _reset_producer()
         log_msg("error", f"Error publishing {event_type} event for comment_id={getattr(comment, 'id', None)}: {str(e)}")
         return False
 
@@ -246,10 +286,10 @@ def publish_analytics_event(
             "payload": payload or {},
         }
 
-        producer.send(resolved_topic, key=event_key, value=event)
-        producer.flush(timeout=5)
+        producer.send(resolved_topic, key=event_key, value=event).get(timeout=15)
         log_msg("info", f"Successfully published analytics event {event_type} (eventId={event_id}) to topic {resolved_topic}")
         return True
     except Exception as e:
+        _reset_producer()
         log_msg("error", f"Error publishing analytics event {event_type}: {str(e)}")
         return False
