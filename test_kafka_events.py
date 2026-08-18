@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app.utils.kafka_producer import publish_post_event, publish_comment_event
+from app.utils.kafka_producer import publish_analytics_event, publish_comment_event, publish_post_event
 
 
 class MockPost:
@@ -64,7 +64,7 @@ def test_publish_comment_created_event():
         topic = args[0]
         event = kwargs["value"]
 
-        assert topic == "comments_events"
+        assert topic == "comments-events"
         assert event["eventType"] == "COMMENT_CREATED"
         assert event["source"] == "post-service"
         assert event["payload"]["id"] == "11111111-2222-3333-4444-555555555555"
@@ -76,6 +76,56 @@ def test_publish_comment_created_event():
         print(json.dumps(event, indent=2))
 
 
+def test_publish_post_viewed_analytics_event():
+    mock_producer = MagicMock()
+    payload = {
+        "userId": "USR-100001",
+        "postId": "7ef6f0d1-a2b7-4f18-94a2-987654321abc",
+        "postCode": "POST-100001",
+        "createdBy": "USR-100020",
+        "city": "Hyderabad",
+        "visibility": "PUBLIC",
+        "viewDuration": 48,
+    }
+    with patch("app.utils.kafka_producer.get_kafka_producer", return_value=mock_producer):
+        success = publish_analytics_event("POST_VIEWED", payload, key=payload["postId"])
+        assert success is True
+        args, kwargs = mock_producer.send.call_args
+        event = kwargs["value"]
+        assert args[0] == "post-events"
+        assert event["eventType"] == "POST_VIEWED"
+        assert event["payload"]["postCode"] == "POST-100001"
+        print("[PASSED] test_publish_post_viewed_analytics_event")
+        print(json.dumps(event, indent=2))
+
+
+def test_publish_comment_created_analytics_event():
+    mock_producer = MagicMock()
+    payload = {
+        "userId": "USR-100001",
+        "commentId": "COMM-100001",
+        "postId": "POST-100001",
+        "parentCommentId": None,
+    }
+    with patch("app.utils.kafka_producer.get_kafka_producer", return_value=mock_producer):
+        success = publish_analytics_event(
+            "COMMENT_CREATED",
+            payload,
+            key="COMM-100001",
+            topic="comments-events",
+        )
+        assert success is True
+        args, kwargs = mock_producer.send.call_args
+        event = kwargs["value"]
+        assert args[0] == "comments-events"
+        assert event["eventType"] == "COMMENT_CREATED"
+        assert event["payload"]["parentCommentId"] is None
+        print("[PASSED] test_publish_comment_created_analytics_event")
+        print(json.dumps(event, indent=2))
+
+
 if __name__ == "__main__":
     test_publish_post_created_event()
     test_publish_comment_created_event()
+    test_publish_post_viewed_analytics_event()
+    test_publish_comment_created_analytics_event()

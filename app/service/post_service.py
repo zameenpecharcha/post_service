@@ -251,6 +251,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                 if not post:
                     context.set_code(grpc.StatusCode.NOT_FOUND)
                     return post_pb2.PostResponse(success=False, message="Post not found")
+                post = repo.record_post_view(post_id)
                 return post_pb2.PostResponse(
                     success=True,
                     message="Post retrieved successfully",
