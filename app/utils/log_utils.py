@@ -1,6 +1,8 @@
 import logging
 import sys
 
+from .request_context import get_correlation_id, get_user_id
+
 
 class CustomAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
@@ -37,8 +39,8 @@ def _get_logger() -> logging.Logger:
 
 def log_msg(level: str, message: str, user_id: str = None, correlation_id: str = None):
     extra = {
-        "user_id": user_id if user_id else "N/A",
-        "correlation_id": correlation_id if correlation_id else "N/A",
+        "user_id": user_id or get_user_id() or "N/A",
+        "correlation_id": correlation_id or get_correlation_id() or "N/A",
     }
     adapter = CustomAdapter(_get_logger(), extra)
     level = (level or "info").lower()
