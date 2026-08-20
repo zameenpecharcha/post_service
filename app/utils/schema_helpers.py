@@ -22,6 +22,15 @@ REPORT_REASON_CODES = frozenset({
     "SPAM", "FAKE_PROPERTY", "ABUSIVE_LANGUAGE", "MISLEADING_INFORMATION",
     "HARASSMENT", "INAPPROPRIATE_CONTENT", "SCAM", "COPYRIGHT", "OTHER",
 })
+REPORT_ACTIONS = frozenset({
+    "NONE", "WARNING_SENT", "CONTENT_REMOVED", "CONTENT_RESTORED", "ACCOUNT_SUSPENDED",
+    "ACCOUNT_BANNED", "PROPERTY_UNPUBLISHED", "POST_HIDDEN", "COMMENT_DELETED", "NO_ACTION",
+})
+REPORT_ACTION_LEGACY = {
+    "RESOLVED": "NONE",
+    "DISMISSED": "NO_ACTION",
+    "REJECTED": "NO_ACTION",
+}
 
 
 def utcnow() -> datetime:
@@ -36,7 +45,10 @@ def parse_uuid(value) -> Optional[UUID]:
     text = str(value).strip()
     if not text or text == "0":
         return None
-    return UUID(text)
+    try:
+        return UUID(text)
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 def uuid_str(value) -> str:
@@ -129,3 +141,14 @@ def normalize_reason_code(value: Optional[str]) -> Optional[str]:
     if key in REPORT_REASON_CODES:
         return key
     return "OTHER"
+
+
+def normalize_report_action(value: Optional[str]) -> Optional[str]:
+    if not value or not str(value).strip():
+        return None
+    key = str(value).strip().upper().replace(" ", "_").replace("-", "_")
+    if key in REPORT_ACTION_LEGACY:
+        key = REPORT_ACTION_LEGACY[key]
+    if key in REPORT_ACTIONS:
+        return key
+    return "NONE"

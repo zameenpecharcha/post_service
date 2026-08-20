@@ -7,8 +7,9 @@ from dotenv import load_dotenv
 from ..proto_files import post_pb2, post_pb2_grpc
 from ..repository.post_repository import PostRepository
 from ..utils.db_connection import get_db_engine
-from ..utils.schema_helpers import parse_uuid, uuid_str, normalize_media_type
+from ..utils.schema_helpers import parse_uuid, uuid_str, normalize_media_type, normalize_report_action
 from ..utils.s3_utils import build_post_key, upload_file_to_s3
+from ..utils.log_utils import log_msg
 from ..interceptors.auth_interceptor import AuthServerInterceptor
 from sqlalchemy.orm import sessionmaker
 
@@ -1038,7 +1039,7 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                     report_id=report_id,
                     status=request.status,
                     reviewed_by=parse_uuid(request.reviewed_by),
-                    action_taken=request.action_taken or None,
+                    action_taken=normalize_report_action(request.action_taken),
                     action_note=request.action_note or None,
                     priority=request.priority or None,
                 )
@@ -1050,8 +1051,8 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
                     report=self._convert_to_proto_report(report),
                 )
             except Exception as e:
-                context.set_code(grpc.StatusCode.INTERNAL)
-                return post_pb2.ReportResponse(success=False, message=str(e))
+                log_msg("error", f"UpdateReportStatus failed: {e}")
+                return post_pb2.ReportResponse(success=False, message=str(e)[:300] or "Update failed")
 
     def AssignReport(self, request, context):
         report_id = parse_uuid(request.report_id)
