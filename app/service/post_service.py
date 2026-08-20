@@ -229,6 +229,9 @@ class PostsService(post_pb2_grpc.PostsServiceServicer):
 
                 db.commit()
                 post = repo.get_post(post.id)
+                # create_post(..., commit=False) skips Kafka; publish after final commit.
+                if post:
+                    repo._publish_post_event("POST_CREATED", post)
                 return post_pb2.PostResponse(
                     success=True,
                     message="Post created successfully",
