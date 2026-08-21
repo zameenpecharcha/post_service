@@ -939,6 +939,7 @@ class PostRepository:
                 comment.like_count = max(0, (comment.like_count or 0) - 1)
                 comment.updated_at = utcnow()
                 self.db.commit()
+                self._publish_comment_analytics("COMMENT_UNLIKED", comment, user_id=user_id)
 
             self.db.refresh(comment)
             return comment
