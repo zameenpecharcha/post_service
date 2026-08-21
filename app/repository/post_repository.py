@@ -65,6 +65,9 @@ class PostRepository:
                 log_msg("info", f"Triggered {event_type} for post_id={post.id}")
             else:
                 log_msg("error", f"{event_type} was not sent to Kafka for post_id={post.id}")
+            # Mirror lifecycle into ClickHouse (OpenSearch gets the domain event above).
+            if event_type in {"POST_CREATED", "POST_UPDATED", "POST_DELETED"}:
+                self._publish_post_analytics(event_type, post, user_id=getattr(post, "user_id", None))
         except Exception as exc:
             log_msg("error", f"Failed to publish {event_type} for post_id={getattr(post, 'id', None)}: {exc}")
 
@@ -88,6 +91,12 @@ class PostRepository:
                 log_msg("info", f"Triggered {event_type} for comment_id={comment.id}")
             else:
                 log_msg("error", f"{event_type} was not sent to Kafka for comment_id={comment.id}")
+            if event_type in {"COMMENT_CREATED", "COMMENT_UPDATED", "COMMENT_DELETED"}:
+                self._publish_comment_analytics(
+                    event_type,
+                    comment,
+                    user_id=getattr(comment, "user_id", None),
+                )
         except Exception as exc:
             log_msg("error", f"Failed to publish {event_type} for comment_id={getattr(comment, 'id', None)}: {exc}")
 
@@ -295,7 +304,11 @@ class PostRepository:
             self.db.add(post)
             self.db.commit()
             self.db.refresh(post)
-            self._publish_post_event("POST_UPDATED", post)
+            # Soft-delete via status should remove from OpenSearch, not re-index as DELETED.
+            if normalize_post_status(post.status) == "DELETED":
+                self._publish_post_event("POST_DELETED", post)
+            else:
+                self._publish_post_event("POST_UPDATED", post)
             return post
         except SQLAlchemyError as e:
             self.db.rollback()
@@ -774,7 +787,6 @@ class PostRepository:
             self.db.refresh(comment)
             log_msg("info", f"create_comment saved, publishing COMMENT_CREATED comment_id={comment.id} post_id={post_id}")
             self._publish_comment_event("COMMENT_CREATED", comment)
-            self._publish_comment_analytics("COMMENT_CREATED", comment, user_id=user_id)
             self._publish_post_analytics("POST_COMMENTED", post, user_id=user_id)
             return comment
         except SQLAlchemyError as e:
